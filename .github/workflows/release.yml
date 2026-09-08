@@ -11,13 +11,16 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# The repo default keeps workflow tokens read-only; creating the release
+# (and its tag) needs contents write, granted explicitly here.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     # glibc and GStreamer must match the target box (Debian 13) exactly.
     container: debian:trixie
-    permissions:
-      contents: write
     steps:
       - name: Install build dependencies
         run: |
