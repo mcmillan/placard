@@ -9,6 +9,13 @@ on:
     paths: [Dockerfile.build, .github/workflows/build-image.yml]
   workflow_dispatch:
 
+# Overlapping builds would race on the :latest tag, and whichever run
+# finishes last wins — not whichever commit is newest. Only the newest
+# definition matters, so supersede in-flight builds outright.
+concurrency:
+  group: build-image
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
