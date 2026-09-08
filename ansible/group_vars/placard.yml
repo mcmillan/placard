@@ -1,6 +1,6 @@
 ---
 # GitHub repo the .deb is released from (owner/name).
-placard_repo: joshmcmillan/placard
+placard_repo: mcmillan/placard
 
 # LAN NTP server; pool.ntp.org remains as fallback. Override per venue.
 ntp_server: 192.168.10.1

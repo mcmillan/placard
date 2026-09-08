@@ -34,7 +34,9 @@ panic = "abort"
 
 [package.metadata.deb]
 maintainer = "Josh McMillan <josh@joshmcmillan.com>"
-depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, fonts-inter"
+# DESIGN.md §11 lists only base+good, but textoverlay (pango) ships in
+# gstreamer1.0-x and kmssink in gstreamer1.0-plugins-bad on Debian.
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-x, fonts-inter"
 section = "video"
 assets = [
     ["target/release/placard", "usr/bin/", "755"],

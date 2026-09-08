@@ -405,7 +405,7 @@ No other crates without a stated reason in the PR. In particular: no `glib`-asyn
 
 1. Runs in a `debian:trixie` container so glibc and GStreamer headers match the target exactly.
 2. `cargo test`, `cargo clippy -D warnings`.
-3. `cargo deb` → `placard_<ver>_amd64.deb`, with `Depends:` on the GStreamer runtime packages and `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `fonts-inter`.
+3. `cargo deb` → `placard_<ver>_amd64.deb`, with `Depends:` on the GStreamer runtime packages and `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad` (kmssink), `gstreamer1.0-x` (pango textoverlay), `fonts-inter`.
 4. Uploads the `.deb` and its `sha256` to a GitHub Release.
 
 `cargo deb` also installs the unit file, the example config and creates `/var/lib/placard`.
