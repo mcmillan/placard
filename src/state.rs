@@ -15,9 +15,8 @@ use crate::scene::{Content, Scene, format_clock};
 use crate::status::{self, StatusReport};
 
 /// Where the reply to a command goes. OSC acks are datagrams back to the
-/// sender; TCP/HTTP wait on a oneshot; parse errors never get this far.
-/// (DESIGN.md §5 also sketches a `None` variant; every transport replies, so
-/// it had no constructor and is omitted.)
+/// sender; TCP/HTTP wait on a oneshot. Parse errors never get this far —
+/// listeners reply to those themselves.
 pub enum ReplyTo {
     Osc(SocketAddr),
     Oneshot(mpsc::Sender<Result<Reply, CommandError>>),
@@ -94,7 +93,7 @@ impl StateThread {
     }
 
     /// The state thread proper: a recv_timeout loop whose 250 ms timeout
-    /// doubles as the countdown/clock ticker (DESIGN.md §5).
+    /// doubles as the ticker that re-derives countdown and clock strings.
     pub fn run(mut self, rx: mpsc::Receiver<Envelope>) {
         self.push_if_changed();
         loop {
@@ -287,7 +286,8 @@ fn load_state(path: &Path) -> Option<PersistedState> {
     }
 }
 
-/// Atomic write: temp file in the same directory, fsync, rename (CLAUDE.md).
+/// Atomic write — temp file in the same directory, fsync, rename — so a
+/// power cut mid-write can never leave a truncated state file.
 fn write_state(path: &Path, state: &PersistedState) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let tmp = dir.join(".state.json.tmp");

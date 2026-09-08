@@ -17,9 +17,9 @@ struct App {
     tx: mpsc::Sender<Envelope>,
 }
 
-/// HTTP listener: `POST /api/command` and `GET /api/status`, nothing else
-/// (DESIGN.md §6). Runs a current-thread tokio runtime on its own thread; the
-/// only await points are accept/read/write, so GStreamer never sees async.
+/// HTTP listener: `POST /api/command` and `GET /api/status`, nothing else.
+/// Runs a current-thread tokio runtime on its own thread; the only await
+/// points are accept/read/write, so GStreamer never sees async.
 pub fn run(listener: std::net::TcpListener, tx: mpsc::Sender<Envelope>) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/command", post(command))

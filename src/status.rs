@@ -4,7 +4,8 @@ use serde::Serialize;
 use crate::scene::Scene;
 use crate::state::LastCommand;
 
-/// `GET /api/status` / `{"cmd":"status"}` reply body (DESIGN.md §6).
+/// `GET /api/status` / `{"cmd":"status"}` reply body; the schema is part of
+/// the wire contract (docs/protocol.md).
 #[derive(Debug, Serialize)]
 pub struct StatusReport {
     pub ok: bool,
@@ -75,9 +76,10 @@ pub fn report(
     }
 }
 
-/// Clock sync state as `(synced, offset_ms)`, `None` where unknowable. The
-/// second of the two permitted `cfg(target_os)` sites (DESIGN.md §14): Linux
-/// asks timedatectl/chrony, macOS reports "unknown".
+/// Clock sync state as `(synced, offset_ms)`, `None` where unknowable.
+/// Linux asks timedatectl/chrony; other platforms report unknown. This and
+/// the sink factory in render.rs are deliberately the only two
+/// `cfg(target_os)` sites — platform differences stay contained here.
 #[cfg(target_os = "linux")]
 fn probe_ntp() -> (Option<bool>, Option<i64>) {
     let synced = std::process::Command::new("timedatectl")

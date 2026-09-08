@@ -1,8 +1,8 @@
-//! Pipeline smoke test (all platforms) and golden-image comparison
-//! (DESIGN.md §13). Goldens are font-rendering-sensitive and only valid for
-//! PNGs produced in the debian:trixie container, so the comparison runs only
-//! when PLACARD_GOLDENS=1 (set by `make goldens` verification and CI), not on
-//! dev Macs.
+//! Pipeline smoke test (all platforms) and golden-image comparison.
+//! Goldens are font-rendering-sensitive and only valid for PNGs produced in
+//! the debian:trixie container, so the comparison runs only when
+//! PLACARD_GOLDENS=1 (set by CI), not on dev machines with different font
+//! stacks. Regenerate deliberately with `make goldens`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,8 +33,9 @@ fn snapshot(fixture: &Path, out: &Path) {
     );
 }
 
-/// Decode a PNG to raw RGBA via GStreamer (no image crate: CLAUDE.md).
-/// Dimensions come from the PNG IHDR; pixels from a pngdec ! filesink dump.
+/// Decode a PNG to raw RGBA via GStreamer, which the tests already depend
+/// on, rather than pulling in an image crate for this one job. Dimensions
+/// come from the PNG IHDR; pixels from a pngdec ! filesink dump.
 fn decode_rgba(png: &Path) -> (u32, u32, Vec<u8>) {
     let header = std::fs::read(png).expect("reading png");
     assert!(header.len() > 24 && &header[1..4] == b"PNG", "not a png");
@@ -130,6 +131,6 @@ fn golden_images_match() {
     }
     assert!(
         compared >= 7,
-        "expected at least the §13 fixture set, compared {compared}"
+        "expected at least the seven standard fixtures, compared {compared}"
     );
 }

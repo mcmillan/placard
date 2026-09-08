@@ -11,7 +11,7 @@ const MAX_LINE: usize = 64 * 1024;
 
 /// NDJSON listener: one JSON command per line, one JSON reply line per
 /// command, connections stay open. A line over 64 KiB or invalid UTF-8 gets
-/// an error reply and the connection is closed (DESIGN.md §6).
+/// an error reply and the connection is closed.
 pub fn run(listener: TcpListener, tx: mpsc::Sender<Envelope>) {
     for stream in listener.incoming() {
         match stream {

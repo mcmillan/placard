@@ -29,7 +29,8 @@ pub fn run(socket: UdpSocket, tx: mpsc::Sender<Envelope>) {
     }
 }
 
-/// Bundles are unpacked and each message handled independently (DESIGN.md §6).
+/// Bundles are unpacked and each message handled independently; bundle
+/// timestamps are ignored.
 fn handle_packet(
     socket: &UdpSocket,
     tx: &mpsc::Sender<Envelope>,

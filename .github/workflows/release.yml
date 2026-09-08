@@ -14,7 +14,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # glibc and GStreamer must match the target box exactly (DESIGN.md §11).
+    # glibc and GStreamer must match the target box (Debian 13) exactly.
     container: debian:trixie
     permissions:
       contents: write

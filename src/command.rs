@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::scene::Rgb;
 
-/// The one command set all three transports normalise to (DESIGN.md §6).
+/// The one command set all three transports (OSC, TCP, HTTP) normalise to.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -65,7 +65,8 @@ pub fn parse_json(line: &str) -> Result<Command, CommandError> {
     serde_json::from_str(line).map_err(|e| CommandError::BadJson(e.to_string()))
 }
 
-/// Map an OSC message onto `Command` per the DESIGN.md §6 address table.
+/// Map an OSC message onto `Command`. The address table is documented in
+/// docs/protocol.md.
 pub fn parse_osc(msg: &OscMessage) -> Result<Command, CommandError> {
     let args = OscArgs::new(&msg.addr, &msg.args);
     match msg.addr.as_str() {

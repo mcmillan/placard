@@ -40,8 +40,8 @@ struct Args {
     snapshot: Option<Vec<PathBuf>>,
 }
 
-/// A snapshot fixture is the `/api/status` scene shape plus a fixed `now`, so
-/// countdown and clock strings are deterministic (DESIGN.md §13).
+/// A snapshot fixture is the `/api/status` scene shape plus a fixed `now`,
+/// so countdown and clock strings render deterministically.
 #[derive(Deserialize)]
 struct SnapshotFixture {
     #[serde(flatten)]
@@ -151,8 +151,9 @@ fn snapshot(config: &Config, scene_path: &Path, out_path: &Path) -> anyhow::Resu
     Ok(())
 }
 
-/// Journald when running under systemd, stderr otherwise (DESIGN.md §7).
-/// Runtime detection, not cfg: JOURNAL_STREAM is set by systemd for services.
+/// Journald when running under systemd, stderr otherwise. Runtime detection,
+/// not cfg: JOURNAL_STREAM is set by systemd for services, so a manual run
+/// on the same host still logs to stderr where you can see it.
 fn init_tracing() {
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()

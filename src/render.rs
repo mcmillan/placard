@@ -34,9 +34,10 @@ pub enum SinkKind {
 }
 
 /// Platform default when `--sink` is not given: the appliance's unit file
-/// passes only `--config`, so Linux must default to kms; a dev machine gets a
-/// window. Part of the sink factory, one of the two permitted
-/// `cfg(target_os)` sites (DESIGN.md §14).
+/// passes only `--config`, so Linux must default to kms; a dev machine gets
+/// a window. This sink factory and the ntp probe in status.rs are
+/// deliberately the only two `cfg(target_os)` sites — platform differences
+/// stay contained here.
 pub fn default_sink() -> SinkKind {
     #[cfg(target_os = "linux")]
     {
@@ -95,8 +96,10 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Build the fixed pipeline from DESIGN.md §4: compositor with three pads —
-    /// background colour, text on a transparent canvas, wall clock.
+    /// Build the fixed pipeline: a compositor with three pads — background
+    /// colour, text on a transparent canvas, wall clock. Layered from day
+    /// one so fades, extra regions or media later are pad additions, not a
+    /// re-architecture.
     pub fn build(
         config: &Config,
         sink_kind: SinkKind,
@@ -192,8 +195,8 @@ impl Renderer {
             .property("ypad", d.padding_y as i32)
             .build()
             .context("creating textoverlay (pango plugin)")?;
-        // The DESIGN.md pipeline sketch says `word-char`; the actual enum nick
-        // in gstpango is `wordchar`.
+        // gstpango's wrap-mode enum nick is `wordchar` (no hyphen), unlike
+        // the `word-char` spelling most GStreamer docs suggest.
         text.set_property_from_str("wrap-mode", "wordchar");
         text.set_property_from_str("line-alignment", "center");
         text.set_property_from_str("halignment", "center");

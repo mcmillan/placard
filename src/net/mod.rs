@@ -27,7 +27,7 @@ pub fn dispatch(
     reply_rx.recv().unwrap_or(Err(CommandError::ShuttingDown))
 }
 
-/// The one JSON reply shape shared by TCP and HTTP (DESIGN.md §6):
+/// The one JSON reply shape shared by TCP and HTTP:
 /// `{"ok":true}`, a full status report, or `{"ok":false,"error":"…"}`.
 pub fn reply_json(result: &Result<Reply, CommandError>) -> String {
     match result {
