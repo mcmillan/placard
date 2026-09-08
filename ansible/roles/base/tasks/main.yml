@@ -69,6 +69,9 @@
     mode: "0644"
   notify: Restart sshd
 
+# Plain timedatectl rather than community.general.timezone so the playbook
+# has no collection dependencies.
 - name: System timezone stays UTC (on-screen clock timezone is app config)
-  community.general.timezone:
-    name: Etc/UTC
+  ansible.builtin.command: timedatectl set-timezone Etc/UTC
+  when: ansible_date_time.tz != 'UTC'
+  changed_when: true

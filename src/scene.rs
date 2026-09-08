@@ -106,8 +106,15 @@ impl Scene {
 
 /// Countdown display: `M:SS` under an hour, `H:MM:SS` otherwise. Past the
 /// target it continues with a leading minus (`-0:07`, `-1:02:15`) indefinitely.
+///
+/// The value shown is the *ceiling* of the remaining time, so each digit
+/// change lands exactly on its second boundary: a 5-second countdown shows
+/// `0:05` for a full second (truncation would flip it to `0:04` almost
+/// immediately), `0:00` lasts exactly one second, and `-0:01` appears
+/// exactly one second past the target.
 pub fn format_countdown(target: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = (target - now).num_seconds();
+    let ms = (target - now).num_milliseconds();
+    let secs = (ms + 999).div_euclid(1000);
     let sign = if secs < 0 { "-" } else { "" };
     let s = secs.abs();
     if s < 3600 {
@@ -134,6 +141,10 @@ mod tests {
     fn fmt_at(delta_secs: i64) -> String {
         // Positive delta: target is delta_secs in the future.
         format_countdown(t0() + TimeDelta::seconds(delta_secs), t0())
+    }
+
+    fn fmt_at_ms(delta_ms: i64) -> String {
+        format_countdown(t0() + TimeDelta::milliseconds(delta_ms), t0())
     }
 
     #[test]
@@ -210,6 +221,21 @@ mod tests {
         assert_eq!(fmt_at(-7), "-0:07");
         assert_eq!(fmt_at(-3600), "-1:00:00");
         assert_eq!(fmt_at(-3735), "-1:02:15");
+    }
+
+    #[test]
+    fn countdown_displays_the_ceiling_of_remaining_time() {
+        // A freshly cued 5-second countdown must actually show 0:05.
+        assert_eq!(fmt_at_ms(5_000), "0:05");
+        assert_eq!(fmt_at_ms(4_999), "0:05");
+        assert_eq!(fmt_at_ms(4_000), "0:04");
+        assert_eq!(fmt_at_ms(1), "0:01");
+        // 0:00 spans exactly [0, -1s): one second, like every other value.
+        assert_eq!(fmt_at_ms(0), "0:00");
+        assert_eq!(fmt_at_ms(-999), "0:00");
+        assert_eq!(fmt_at_ms(-1_000), "-0:01");
+        assert_eq!(fmt_at_ms(-1_001), "-0:01");
+        assert_eq!(fmt_at_ms(-2_000), "-0:02");
     }
 
     #[test]

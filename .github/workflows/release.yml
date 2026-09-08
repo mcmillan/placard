@@ -66,33 +66,36 @@ jobs:
           # rerun of the same commit just makes a newer release.
           STAMP=$(date -u +%Y%m%d%H%M%S)
           VERSION="$BASE+$STAMP"
-          cargo deb --deb-version "$VERSION"
+          # PLACARD_BUILD is compiled into the binary and shown by
+          # /api/status as "build", so a box can say which release it runs.
+          PLACARD_BUILD="$STAMP" cargo deb --deb-version "$VERSION"
           DEB=$(ls target/debian/placard_*.deb)
           # Bare filename in the .sha256 so Ansible's checksum URL matches.
           (cd target/debian && sha256sum "$(basename "$DEB")" > "$(basename "$DEB").sha256")
           echo "DEB=$DEB" >> "$GITHUB_ENV"
           echo "TAG=$STAMP" >> "$GITHUB_ENV"
 
-      # No third-party actions. The create call goes through curl so the
-      # API's full error body is visible if it fails; assets upload
-      # separately once the release exists.
+      # No third-party actions. Draft-then-publish keeps `latest` atomic: a
+      # release only becomes visible once its assets are attached, so Ansible
+      # can never resolve an asset-less latest from an interrupted upload.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          printf '{"tag_name":"%s","target_commitish":"%s","name":"%s","generate_release_notes":true}' \
-            "$TAG" "$GITHUB_SHA" "$TAG" > /tmp/body.json
-          CODE=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --data-binary @/tmp/body.json \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases")
-          echo "create release: HTTP $CODE"
-          cat /tmp/resp.json
-          [ "$CODE" = "201" ]
-          gh release upload "$TAG" "$DEB" "$DEB.sha256"
+          RID=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" -f name="$TAG" \
+            -F draft=true -F generate_release_notes=true --jq .id)
+          for f in "$DEB" "$DEB.sha256"; do
+            curl -sS --fail-with-body -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RID/assets?name=$(basename "$f")" \
+              > /dev/null
+          done
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RID" \
+            -F draft=false -f make_latest=true --jq .tag_name
 
       # Save even when a later step failed — compiled dependencies are worth
       # keeping either way. Skip only when this exact key was already hit.

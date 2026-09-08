@@ -48,7 +48,9 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
   to an absolute target when received, so it survives a restart.
 - Countdowns run through zero and keep counting negative (`-0:07`,
   `-1:02:15`) until another command replaces them. Format is `M:SS` under an
-  hour, `H:MM:SS` from one hour.
+  hour, `H:MM:SS` from one hour. The displayed value is the ceiling of the
+  remaining time, so digits change exactly on second boundaries: a 5-second
+  countdown shows `0:05` for a full second and `0:00` for exactly one.
 - `clear` is black background, no text (not "back to the boot scene"). The
   wall clock stays on screen across every command, including `clear`.
 - `status` and `history` are TCP/HTTP only. `history` returns
@@ -82,6 +84,7 @@ replies with the full status object:
   "ntp_synced": true,
   "clock_offset_ms": 3,
   "version": "0.1.0",
+  "build": "20260908053925",
   "last_command": { "at": "2026-09-08T18:29:10Z", "via": "osc", "from": "192.168.10.20:53101" }
 }
 ```
@@ -91,12 +94,16 @@ replies with the full status object:
 - `canned_id` is set while the scene is an unmodified `canned` command.
 - `ntp_synced` is `true`/`false`, or `"unknown"` where it cannot be probed
   (non-Linux dev machines).
-- `clock_offset_ms` is null when chrony is unavailable.
+- `clock_offset_ms` is null when chrony is unavailable. Both NTP fields
+  are cached for up to 5 seconds.
+- `build` is the release tag this binary was built from (`"dev"` for local
+  builds) — the way to confirm an upgrade actually landed.
 
 ### TCP specifics
 
-Connections may stay open and send many commands. A line over 64 KiB or
-invalid UTF-8 gets an error reply and the connection is closed.
+Connections may stay open and send many commands. A line whose content
+exceeds 64 KiB, or that is not valid UTF-8, gets an error reply (and a
+history entry) and the connection is closed.
 
 ## OSC
 

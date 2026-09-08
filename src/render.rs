@@ -285,14 +285,19 @@ impl Renderer {
 
         // Drain the spec channel from the main loop so property sets stay on
         // this thread. 20 ms ≈ one frame at 50 fps.
+        let last_spec_at = Rc::new(std::cell::Cell::new(std::time::Instant::now()));
         let apply_source = {
             let main_loop = main_loop.clone();
             let renderer = Rc::new(self);
             let renderer2 = renderer.clone();
+            let last_spec_at = last_spec_at.clone();
             glib::timeout_add_local(Duration::from_millis(20), move || {
                 loop {
                     match spec_rx.try_recv() {
-                        Ok(spec) => renderer2.apply(&spec),
+                        Ok(spec) => {
+                            last_spec_at.set(std::time::Instant::now());
+                            renderer2.apply(&spec);
+                        }
                         Err(mpsc::TryRecvError::Empty) => break glib::ControlFlow::Continue,
                         Err(mpsc::TryRecvError::Disconnected) => {
                             // State thread is gone; die and let systemd restart us.
@@ -305,10 +310,25 @@ impl Renderer {
         };
 
         let _ = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
-        let heartbeat = glib::timeout_add_seconds_local(1, || {
-            let _ = sd_notify::notify(&[sd_notify::NotifyState::Watchdog]);
-            glib::ControlFlow::Continue
-        });
+        // The heartbeat attests BOTH threads: the state thread pushes a spec
+        // at least once a second (the wall clock string changes), so if none
+        // has arrived for a while the state thread is wedged — stop feeding
+        // the watchdog and let systemd restart the whole process.
+        let heartbeat = {
+            let last_spec_at = last_spec_at.clone();
+            let stalled_logged = std::cell::Cell::new(false);
+            glib::timeout_add_seconds_local(1, move || {
+                if last_spec_at.get().elapsed() < Duration::from_secs(5) {
+                    let _ = sd_notify::notify(&[sd_notify::NotifyState::Watchdog]);
+                    stalled_logged.set(false);
+                } else if !stalled_logged.replace(true) {
+                    tracing::error!(
+                        "no render spec for 5s — state thread wedged, withholding watchdog heartbeat"
+                    );
+                }
+                glib::ControlFlow::Continue
+            })
+        };
 
         main_loop.run();
 

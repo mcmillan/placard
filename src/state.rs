@@ -92,6 +92,9 @@ pub struct StateThread {
     /// When a flash began; transient by design — a restart mid-flash comes
     /// back with steady colours.
     flash_started: Option<Instant>,
+    /// Last NTP probe result and when it ran. Probing shells out, so it is
+    /// cached: a client polling status must not stall the ticker each poll.
+    ntp_cache: Option<(Instant, status::NtpProbe)>,
     spec_tx: mpsc::Sender<RenderSpec>,
     /// Cloned OSC socket, used only to send `/placard/ok` / `/placard/error`.
     osc_socket: Option<UdpSocket>,
@@ -113,8 +116,8 @@ impl StateThread {
                 Some(config.defaults.boot_scene.clone()),
             ),
         };
-        let history = load_history(&history_path);
-        StateThread {
+        let (history, history_oversized) = load_history(&history_path);
+        let mut state = StateThread {
             config,
             state_path,
             scene,
@@ -126,9 +129,14 @@ impl StateThread {
             history_path,
             history_appends: 0,
             flash_started: None,
+            ntp_cache: None,
             spec_tx,
             osc_socket,
+        };
+        if history_oversized {
+            state.compact_history();
         }
+        state
     }
 
     /// The state thread proper: a recv_timeout loop whose timeout doubles as
@@ -336,12 +344,21 @@ impl StateThread {
                 return Ok(Reply::History(self.history.iter().rev().cloned().collect()));
             }
             Command::Status => {
+                let probe = match self.ntp_cache {
+                    Some((at, probe)) if at.elapsed() < Duration::from_secs(5) => probe,
+                    _ => {
+                        let probe = status::probe_ntp();
+                        self.ntp_cache = Some((Instant::now(), probe));
+                        probe
+                    }
+                };
                 return Ok(Reply::Status(status::report(
                     &self.scene,
                     self.canned_id.clone(),
                     self.started.elapsed().as_secs(),
                     self.last_command.clone(),
                     Utc::now(),
+                    probe,
                 )));
             }
         }
@@ -445,17 +462,24 @@ fn load_state(path: &Path) -> Option<PersistedState> {
 }
 
 /// Reload the tail of `history.ndjson`. Lines that don't parse (torn by a
-/// power cut, or from an older schema) are skipped, not fatal.
-fn load_history(path: &Path) -> std::collections::VecDeque<HistoryEntry> {
+/// power cut, or from an older schema) are skipped, not fatal. The second
+/// value reports whether the file has outgrown the cap: in-process
+/// compaction only fires after enough appends in one lifetime, so a
+/// restart-heavy box would otherwise grow the file forever.
+fn load_history(path: &Path) -> (std::collections::VecDeque<HistoryEntry>, bool) {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) => {
             if err.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(path = %path.display(), %err, "failed to read history");
             }
-            return std::collections::VecDeque::with_capacity(HISTORY_CAP);
+            return (
+                std::collections::VecDeque::with_capacity(HISTORY_CAP),
+                false,
+            );
         }
     };
+    let oversized = raw.lines().count() > HISTORY_CAP;
     let mut entries: std::collections::VecDeque<HistoryEntry> = raw
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
@@ -463,7 +487,7 @@ fn load_history(path: &Path) -> std::collections::VecDeque<HistoryEntry> {
     while entries.len() > HISTORY_CAP {
         entries.pop_front();
     }
-    entries
+    (entries, oversized)
 }
 
 /// Atomic write — temp file in the same directory, fsync, rename — so a
@@ -512,22 +536,29 @@ pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config, invert: b
         Content::Countdown { target, label } => {
             let digits = crate::scene::format_countdown(*target, now);
             match label {
-                Some(label) => (
-                    vec![
-                        FitLine {
-                            text: label.clone(),
+                Some(label) => {
+                    // The label can contain newlines, which render as real
+                    // line breaks — each one must count towards the height
+                    // or the fit underestimates and textoverlay culls.
+                    let mut lines: Vec<FitLine> = label
+                        .lines()
+                        .map(|l| FitLine {
+                            text: l.to_string(),
                             scale: 0.6,
-                        },
-                        FitLine {
-                            text: digits.clone(),
-                            scale: 1.0,
-                        },
-                    ],
-                    format!(
-                        "<span size=\"60%\">{}</span>\n{digits}",
-                        glib::markup_escape_text(label)
-                    ),
-                ),
+                        })
+                        .collect();
+                    lines.push(FitLine {
+                        text: digits.clone(),
+                        scale: 1.0,
+                    });
+                    (
+                        lines,
+                        format!(
+                            "<span size=\"60%\">{}</span>\n{digits}",
+                            glib::markup_escape_text(label)
+                        ),
+                    )
+                }
                 None => (
                     vec![FitLine {
                         text: digits.clone(),
@@ -539,16 +570,16 @@ pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config, invert: b
         }
     };
     let d = &config.display;
+    // Float subtraction so a mis-sized config can never wrap u32 arithmetic
+    // into a giant usable area; validation rejects such configs at load, this
+    // is defence in depth.
+    let usable_w = (f64::from(d.width) - 2.0 * f64::from(d.padding_x)).max(1.0);
+    let usable_h = (f64::from(d.height) - 2.0 * f64::from(d.padding_y)).max(1.0);
     RenderSpec {
         bg_argb: if invert { scene.fg } else { scene.bg }.to_argb(0xff),
         text_markup,
         text_argb: if invert { scene.bg } else { scene.fg }.to_argb(0xff),
-        text_px: fit_font_px(
-            &fit_lines,
-            d.max_font_px(),
-            f64::from(d.width - 2 * d.padding_x),
-            f64::from(d.height - 2 * d.padding_y),
-        ),
+        text_px: fit_font_px(&fit_lines, d.max_font_px(), usable_w, usable_h),
         clock_text: format_clock(now, config.clock.timezone),
     }
 }
@@ -560,13 +591,59 @@ struct FitLine {
     scale: f64,
 }
 
-// Conservative Inter Bold metrics, calibrated against rendered frames:
-// average advance per char and line height as fractions of the pixel size,
-// plus slack because word wrap breaks early, not at exact character counts.
-const AVG_CHAR_W: f64 = 0.68;
 const LINE_H: f64 = 1.25;
-const WRAP_SLACK: f64 = 1.1;
 const MIN_FONT_PX: u32 = 8;
+const SPACE_EM: f64 = 0.30;
+
+/// Per-character advance estimate for Inter Bold, in em, deliberately on the
+/// wide side of reality: overestimating width only makes text smaller, while
+/// underestimating risks textoverlay culling the whole layout. Anything
+/// non-ASCII (CJK, emoji, symbols) is assumed very wide for the same reason.
+fn char_em(c: char) -> f64 {
+    match c {
+        ' ' => SPACE_EM,
+        'i' | 'I' | 'l' | 'j' | '!' | '.' | ',' | ':' | ';' | '\'' | '|' => 0.40,
+        'f' | 't' | 'r' | '-' | '(' | ')' | '[' | ']' | '"' => 0.55,
+        'm' | 'w' | 'M' | 'W' | '@' => 1.00,
+        c if c.is_ascii() => 0.80,
+        _ => 1.30,
+    }
+}
+
+fn text_em(text: &str) -> f64 {
+    text.chars().map(char_em).sum()
+}
+
+/// Conservative greedy word wrap: how many rendered lines one logical line
+/// occupies at `em_px` pixels per em. Mirrors Pango's greedy breaker but with
+/// the inflated widths above, so it can only over-count lines, never under.
+/// Words wider than the frame char-break, as wrap-mode `wordchar` does.
+fn wrapped_line_count(text: &str, em_px: f64, usable_w: f64) -> usize {
+    let space = SPACE_EM * em_px;
+    let mut lines = 1usize;
+    let mut cur = 0.0f64;
+    let mut first = true;
+    // split(' ') rather than split_whitespace so runs of spaces keep their
+    // width instead of collapsing (collapsing would under-estimate).
+    for word in text.split(' ') {
+        let w = text_em(word) * em_px;
+        let gap = if first { 0.0 } else { space };
+        first = false;
+        if w > usable_w {
+            // Char-broken long word: fills the rest of this line, then whole
+            // lines, then leaves a remainder.
+            let extra = ((cur + gap + w) / usable_w).ceil().max(1.0) as usize;
+            lines += extra - 1;
+            cur = (cur + gap + w) - (extra - 1) as f64 * usable_w;
+        } else if cur + gap + w <= usable_w {
+            cur += gap + w;
+        } else {
+            lines += 1;
+            cur = w;
+        }
+    }
+    lines
+}
 
 /// Largest pixel size ≤ `max_px` whose wrapped layout fits the usable area.
 /// `textoverlay` silently renders nothing when a layout is taller than the
@@ -576,18 +653,17 @@ fn fit_font_px(lines: &[FitLine], max_px: u32, usable_w: f64, usable_h: f64) -> 
         let mut height = 0.0;
         for line in lines {
             let eff = f64::from(px) * line.scale;
+            // Prefer shrinking over breaking inside a word: the widest word
+            // must fit on a line of its own.
             let longest_word = line
                 .text
                 .split_whitespace()
-                .map(|w| w.chars().count())
-                .max()
-                .unwrap_or(0);
-            if longest_word as f64 * AVG_CHAR_W * eff > usable_w {
+                .map(text_em)
+                .fold(0.0f64, f64::max);
+            if longest_word * eff > usable_w {
                 return false;
             }
-            let line_w = line.text.chars().count() as f64 * AVG_CHAR_W * eff * WRAP_SLACK;
-            let wrapped = (line_w / usable_w).ceil().max(1.0);
-            height += wrapped * LINE_H * eff;
+            height += wrapped_line_count(&line.text, eff, usable_w) as f64 * LINE_H * eff;
         }
         height <= usable_h
     };
@@ -719,8 +795,40 @@ mod tests {
     #[test]
     fn unbreakable_word_is_bounded_by_width() {
         let spec = derive_spec(&scene_text(&"M".repeat(60)), t0(), &test_config(), false);
-        // 60 chars at 0.68 advance must fit in 1728 usable px.
-        assert!(f64::from(spec.text_px) * AVG_CHAR_W * 60.0 <= 1728.0);
+        // 60 'M's at their estimated 1.0 em advance must fit in 1728 px.
+        assert!(f64::from(spec.text_px) * 60.0 <= 1728.0);
+    }
+
+    #[test]
+    fn wide_glyphs_shrink_more_than_narrow_ones() {
+        let cfg = test_config();
+        let wide = derive_spec(&scene_text(&"WM ".repeat(60)), t0(), &cfg, false).text_px;
+        let narrow = derive_spec(&scene_text(&"il ".repeat(60)), t0(), &cfg, false).text_px;
+        assert!(
+            wide < narrow,
+            "wide-glyph text must be sized smaller ({wide} vs {narrow})"
+        );
+    }
+
+    #[test]
+    fn multiline_countdown_label_counts_every_line() {
+        let cfg = test_config();
+        let scene_with = |label: &str| Scene {
+            bg: Rgb::BLACK,
+            fg: "ffffff".parse().unwrap(),
+            content: Content::Countdown {
+                target: t0() + TimeDelta::seconds(90),
+                label: Some(label.into()),
+            },
+        };
+        let one = derive_spec(&scene_with("HOLD"), t0(), &cfg, false).text_px;
+        let many = derive_spec(&scene_with(&"HOLD\n".repeat(12)), t0(), &cfg, false).text_px;
+        assert!(
+            many < one,
+            "a 12-line label must shrink the layout ({many} vs {one})"
+        );
+        // And the shrunk layout must actually fit the frame estimate.
+        assert!(f64::from(many) * 0.6 * 12.0 * LINE_H + f64::from(many) * LINE_H <= 952.0 * 1.01);
     }
 
     fn test_state(name: &str) -> (StateThread, mpsc::Receiver<RenderSpec>) {
@@ -819,6 +927,38 @@ mod tests {
         assert_eq!(entries[0].raw, "line 2");
         assert_eq!(entries[2].raw, "line 0");
         assert_eq!(entries[0].via, "tcp");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_history_log_is_compacted_at_load() {
+        let dir = std::env::temp_dir().join(format!("placard-hist-boot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Simulate many short process lifetimes appending without ever
+        // hitting the in-process compaction threshold.
+        let mut log = String::new();
+        for i in 0..(HISTORY_CAP * 3) {
+            let entry = HistoryEntry {
+                at: t0(),
+                via: "tcp".into(),
+                from: None,
+                raw: format!("m{i}"),
+                ok: true,
+                error: None,
+            };
+            log.push_str(&serde_json::to_string(&entry).unwrap());
+            log.push('\n');
+        }
+        std::fs::write(dir.join("history.ndjson"), log).unwrap();
+
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let _state = StateThread::new(test_config(), &dir, spec_tx, None);
+        let lines = std::fs::read_to_string(dir.join("history.ndjson"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(lines, HISTORY_CAP, "boot must compact an oversized log");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

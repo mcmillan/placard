@@ -60,6 +60,10 @@ pub enum CommandError {
     UnknownCanned(String),
     #[error("invalid JSON: {0}")]
     BadJson(String),
+    #[error("line exceeds 64 KiB")]
+    LineTooLong,
+    #[error("invalid UTF-8")]
+    InvalidUtf8,
     #[error("{0} is not available over OSC")]
     QueryNotSupported(&'static str),
     #[error("shutting down")]

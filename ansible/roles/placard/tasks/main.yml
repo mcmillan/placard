@@ -9,6 +9,16 @@
   register: placard_release_info
   check_mode: false
 
+- name: Ensure the release actually carries its artefacts
+  ansible.builtin.assert:
+    that:
+      - placard_release_info.json.assets | selectattr('name', 'search', '\.deb$') | list | length > 0
+      - placard_release_info.json.assets | selectattr('name', 'search', '\.sha256$') | list | length > 0
+    fail_msg: >-
+      Release {{ placard_release_info.json.tag_name | default('?') }} has no
+      .deb/.sha256 assets (interrupted CI upload?). Pin placard_release to a
+      known-good tag or re-run the release workflow.
+
 - name: Resolve the .deb and checksum assets
   ansible.builtin.set_fact:
     placard_deb_asset: "{{ placard_release_info.json.assets | selectattr('name', 'search', '\\.deb$') | first }}"

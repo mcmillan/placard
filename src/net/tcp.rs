@@ -2,11 +2,12 @@ use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 
-use crate::command::parse_json;
+use crate::command::{CommandError, parse_json};
 use crate::state::Envelope;
 
 use super::{dispatch, reply_json};
 
+/// Maximum line *content* (the terminator doesn't count against it).
 const MAX_LINE: usize = 64 * 1024;
 
 /// NDJSON listener: one JSON command per line, one JSON reply line per
@@ -43,9 +44,10 @@ fn serve(stream: TcpStream, tx: mpsc::Sender<Envelope>) {
 
     loop {
         line.clear();
-        // Bounded read: never buffer more than MAX_LINE for one line.
+        // Bounded read: MAX_LINE of content plus room for \r\n; anything
+        // longer is over the limit even before a newline shows up.
         match (&mut reader)
-            .take(MAX_LINE as u64 + 1)
+            .take(MAX_LINE as u64 + 3)
             .read_until(b'\n', &mut line)
         {
             Ok(0) => return, // clean disconnect
@@ -55,14 +57,26 @@ fn serve(stream: TcpStream, tx: mpsc::Sender<Envelope>) {
                 return;
             }
         }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        // Rejects dispatch like everything else so they land in the history
+        // and reply through the one shared path; the connection then closes.
         if line.len() > MAX_LINE {
-            let _ = writeln!(writer, r#"{{"ok":false,"error":"line exceeds 64 KiB"}}"#);
+            let raw = String::from_utf8_lossy(&line).into_owned();
+            let result = dispatch(&tx, Err(CommandError::LineTooLong), raw, "tcp", peer);
+            let _ = writeln!(writer, "{}", reply_json(&result));
             return;
         }
         let text = match std::str::from_utf8(&line) {
             Ok(text) => text.trim(),
             Err(_) => {
-                let _ = writeln!(writer, r#"{{"ok":false,"error":"invalid UTF-8"}}"#);
+                let raw = String::from_utf8_lossy(&line).into_owned();
+                let result = dispatch(&tx, Err(CommandError::InvalidUtf8), raw, "tcp", peer);
+                let _ = writeln!(writer, "{}", reply_json(&result));
                 return;
             }
         };
