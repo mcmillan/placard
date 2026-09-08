@@ -55,8 +55,9 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
   `{"ok":true,"history":[…]}` — the last 200 inbound messages, newest first,
   each with `at`, `via`, `from`, the `raw` wire text (truncated at 512
   chars) and `ok`/`error`. Rejected messages are included; `status` and
-  `history` queries themselves are not. The history is in-memory only and
-  clears on restart.
+  `history` queries themselves are not. History persists across restarts —
+  it is appended to `history.ndjson` in the state directory, and the last
+  200 entries are reloaded on boot.
 
 ### Replies
 

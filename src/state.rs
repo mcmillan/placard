@@ -40,24 +40,28 @@ pub struct Envelope {
     pub reply: ReplyTo,
 }
 
-/// One inbound message as shown by `/api/history` and the web UI.
-#[derive(Debug, Clone, Serialize)]
+/// One inbound message as shown by `/api/history` and the web UI, and as one
+/// line of `history.ndjson`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub at: DateTime<Utc>,
-    pub via: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<SocketAddr>,
     pub raw: String,
     pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// Ring size for the in-memory history. Diagnostics, not a log: it is not
-/// persisted and restarts clear it.
+/// How many history entries survive: the ring size, the `history` reply and
+/// what a restart reloads from the tail of `history.ndjson`.
 const HISTORY_CAP: usize = 200;
 /// Raw text is truncated for storage so a 64 KiB TCP line can't bloat the UI.
 const HISTORY_RAW_CAP: usize = 512;
+/// The on-disk log is rewritten from the ring after this many appends, so
+/// its size stays bounded no matter how long the box runs.
+const HISTORY_COMPACT_EVERY: usize = HISTORY_CAP * 10;
 
 /// What survives a power cycle: the scene and where it came from.
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,6 +87,8 @@ pub struct StateThread {
     started: Instant,
     last_pushed: Option<RenderSpec>,
     history: std::collections::VecDeque<HistoryEntry>,
+    history_path: PathBuf,
+    history_appends: usize,
     /// When a flash began; transient by design — a restart mid-flash comes
     /// back with steady colours.
     flash_started: Option<Instant>,
@@ -99,6 +105,7 @@ impl StateThread {
         osc_socket: Option<UdpSocket>,
     ) -> StateThread {
         let state_path = state_dir.join("state.json");
+        let history_path = state_dir.join("history.ndjson");
         let (scene, canned_id) = match load_state(&state_path) {
             Some(p) => (p.scene, p.canned_id),
             None => (
@@ -106,6 +113,7 @@ impl StateThread {
                 Some(config.defaults.boot_scene.clone()),
             ),
         };
+        let history = load_history(&history_path);
         StateThread {
             config,
             state_path,
@@ -114,7 +122,9 @@ impl StateThread {
             last_command: None,
             started: Instant::now(),
             last_pushed: None,
-            history: std::collections::VecDeque::with_capacity(HISTORY_CAP),
+            history,
+            history_path,
+            history_appends: 0,
             flash_started: None,
             spec_tx,
             osc_socket,
@@ -179,14 +189,65 @@ impl StateThread {
             raw.truncate(end);
             raw.push('…');
         }
-        self.history.push_back(HistoryEntry {
+        let entry = HistoryEntry {
             at: Utc::now(),
-            via: envelope.via,
+            via: envelope.via.to_string(),
             from: envelope.from,
             raw,
             ok: error.is_none(),
             error: error.map(|e| e.to_string()),
-        });
+        };
+        // Into the ring first: compaction snapshots the ring, so the entry
+        // that trips the threshold must already be in it.
+        self.history.push_back(entry.clone());
+        self.append_history(&entry);
+    }
+
+    /// Append one line to `history.ndjson`. No fsync: this is diagnostics,
+    /// and a power cut can at worst tear the final line, which the loader
+    /// skips. Failures are logged and never disturb the show.
+    fn append_history(&mut self, entry: &HistoryEntry) {
+        let line = match serde_json::to_string(entry) {
+            Ok(line) => line,
+            Err(err) => {
+                tracing::warn!(%err, "failed to serialise history entry");
+                return;
+            }
+        };
+        let appended = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.history_path)
+            .and_then(|mut file| writeln!(file, "{line}"));
+        if let Err(err) = appended {
+            tracing::warn!(path = %self.history_path.display(), %err, "failed to append history");
+            return;
+        }
+        self.history_appends += 1;
+        if self.history_appends >= HISTORY_COMPACT_EVERY {
+            self.compact_history();
+        }
+    }
+
+    /// Rewrite the log as just the current ring (atomically, like
+    /// state.json), bounding the file to ~200 lines regardless of uptime.
+    fn compact_history(&mut self) {
+        self.history_appends = 0;
+        let dir = self.history_path.parent().unwrap_or(Path::new("."));
+        let tmp = dir.join(".history.ndjson.tmp");
+        let write = || -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&tmp)?;
+            for entry in &self.history {
+                if let Ok(line) = serde_json::to_string(entry) {
+                    writeln!(file, "{line}")?;
+                }
+            }
+            file.sync_all()?;
+            std::fs::rename(&tmp, &self.history_path)
+        };
+        if let Err(err) = write() {
+            tracing::warn!(path = %self.history_path.display(), %err, "failed to compact history");
+        }
     }
 
     /// Apply a command to the scene. Errors leave the scene untouched. Any
@@ -381,6 +442,28 @@ fn load_state(path: &Path) -> Option<PersistedState> {
             None
         }
     }
+}
+
+/// Reload the tail of `history.ndjson`. Lines that don't parse (torn by a
+/// power cut, or from an older schema) are skipped, not fatal.
+fn load_history(path: &Path) -> std::collections::VecDeque<HistoryEntry> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %path.display(), %err, "failed to read history");
+            }
+            return std::collections::VecDeque::with_capacity(HISTORY_CAP);
+        }
+    };
+    let mut entries: std::collections::VecDeque<HistoryEntry> = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    while entries.len() > HISTORY_CAP {
+        entries.pop_front();
+    }
+    entries
 }
 
 /// Atomic write — temp file in the same directory, fsync, rename — so a
@@ -703,6 +786,62 @@ mod tests {
         assert_eq!(entries[1].raw, r#"{"cmd":"show","text":"GO"}"#);
         assert!(entries[1].ok);
         assert_eq!(entries[1].via, "tcp");
+    }
+
+    #[test]
+    fn history_survives_a_restart_via_ndjson_tail() {
+        let dir = std::env::temp_dir().join(format!("placard-hist-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let mut state = StateThread::new(test_config(), &dir, spec_tx, None);
+        for i in 0..3 {
+            let (env, _rx) = envelope(
+                Err(CommandError::BadJson(format!("e{i}"))),
+                &format!("line {i}"),
+            );
+            state.handle(env);
+        }
+        drop(state);
+
+        // A torn final line (power cut mid-append) must not poison the load.
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("history.ndjson"))
+            .unwrap();
+        write!(file, "{{\"at\":\"2026-").unwrap();
+        drop(file);
+
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let mut reborn = StateThread::new(test_config(), &dir, spec_tx, None);
+        let entries = history_of(&mut reborn);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].raw, "line 2");
+        assert_eq!(entries[2].raw, "line 0");
+        assert_eq!(entries[0].via, "tcp");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn history_log_is_compacted_to_the_ring() {
+        let dir = std::env::temp_dir().join(format!("placard-hist-compact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let mut state = StateThread::new(test_config(), &dir, spec_tx, None);
+        for i in 0..(HISTORY_COMPACT_EVERY + 3) {
+            let (env, _rx) = envelope(Err(CommandError::BadJson("e".into())), &format!("m{i}"));
+            state.handle(env);
+        }
+        drop(state);
+        let lines = std::fs::read_to_string(dir.join("history.ndjson"))
+            .unwrap()
+            .lines()
+            .count();
+        // Compaction fired at the threshold; only the post-compact appends
+        // sit on top of the ring snapshot.
+        assert_eq!(lines, HISTORY_CAP + 3);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

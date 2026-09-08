@@ -70,7 +70,7 @@
       document.getElementById("empty").hidden = data.history.length !== 0;
       document.getElementById("meta").textContent =
         `${data.history.length} message${data.history.length === 1 ? "" : "s"} · ` +
-        `newest first · refreshes every 2 s · history is in-memory and clears on restart`;
+        `newest first · refreshes every 2 s · last 200 kept, surviving restarts`;
     } catch (err) {
       document.getElementById("meta").textContent = `unreachable: ${err}`;
     }
