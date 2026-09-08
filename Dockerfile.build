@@ -20,6 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --component clippy,rustfmt
 ENV PATH="/root/.cargo/bin:${PATH}"
+# CI container jobs override $HOME, which is where rustup/cargo look for
+# their state by default; pin them to where the image actually put them.
+ENV RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo
 
 # Baked in so CI never compiles tooling, only the project.
 RUN cargo install cargo-deb --locked

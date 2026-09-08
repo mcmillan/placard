@@ -37,11 +37,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # CARGO_HOME is /root/.cargo (image ENV), not $HOME — cache that.
       - uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            /root/.cargo/registry
+            /root/.cargo/git
             target
           key: cargo-${{ hashFiles('Cargo.lock') }}
 
