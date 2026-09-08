@@ -24,8 +24,9 @@ CI and pixel-compares every release.
   through zero and keep counting negative — a stage manager wants "two
   minutes over", not "done".
 - A wall clock always in the corner, across every cue.
-- A `flash` flag that inverts the colours every 500 ms for 3 s when a
-  message lands.
+- A `flash` option that inverts the colours every 500 ms when a message
+  lands — for three seconds, for a given number of seconds, or until the
+  next cue (`SHOW STOP` keeps flashing until someone changes it).
 - Pull the power mid-countdown and it comes back on the same countdown,
   unattended. Any fault → black → systemd restarts it; a hung process or
   kernel trips the hardware watchdog.

@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use serde::Deserialize;
 
-use crate::scene::Rgb;
+use crate::scene::{Flash, Rgb};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,9 +91,11 @@ pub struct Canned {
     pub text: String,
     pub bg: Option<Rgb>,
     pub fg: Option<Rgb>,
-    /// Invert fg/bg every 500 ms for 3 s whenever this message is cued.
+    /// How this message flashes when cued: `true` for the default 3 s, a
+    /// number of seconds, or `{ infinite = true }`. A command's own `flash`
+    /// overrides it either way.
     #[serde(default)]
-    pub flash: bool,
+    pub flash: Flash,
 }
 
 impl Config {

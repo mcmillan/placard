@@ -44,7 +44,7 @@ bg = "0b6e2e"
 [canned.show_stop]
 text = "SHOW STOP"
 bg = "8a0000"
-flash = true
+flash = { infinite = true }   # true (3 s), a number of seconds, or infinite
 
 [canned.cans_on]
 text = "PUT YOUR CANS ON"

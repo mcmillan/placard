@@ -26,6 +26,8 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
 ```json
 { "cmd": "show", "text": "STAND BY", "bg": "000000", "fg": "ffffff" }
 { "cmd": "show", "text": "SHOW STOP", "flash": true }
+{ "cmd": "show", "text": "SHOW STOP", "flash": 10 }
+{ "cmd": "show", "text": "SHOW STOP", "flash": { "infinite": true } }
 { "cmd": "canned", "id": "go" }
 { "cmd": "canned", "id": "go", "bg": "0b6e2e" }
 { "cmd": "canned", "id": "show_stop", "flash": false }
@@ -39,11 +41,23 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
 
 - `bg`/`fg` are optional everywhere; omitted means "keep the current colour"
   (for `canned`, the canned message's own colours, then `[defaults]`).
-- `flash: true` inverts fg and bg every 500 ms for 3 seconds when the
-  message lands, then settles on the real colours. Canned messages can set
-  `flash = true` in config to always do this; the command's own `flash`
-  overrides it either way. The effect is transient — it does not survive a
-  restart and any later command ends it early.
+- `flash` inverts fg and bg every 500 ms when the message lands, then
+  settles back on the real colours. It accepts:
+
+  | Value | Meaning |
+  |---|---|
+  | `true` | flash for the default 3 seconds |
+  | `false` | don't flash |
+  | `10` | flash for 10 seconds |
+  | `{"duration_s": 10}` | the same, spelled out |
+  | `{"infinite": true}` | flash until the next command |
+  | `-1` | the same, in scalar form (for OSC, which has no tables) |
+
+  Canned messages take the same values in config; a command's own `flash`
+  overrides the canned setting either way. Any later command ends a flash
+  early. A timed flash is transient and does not survive a restart; an
+  endless one is part of the state and resumes, since an alarm that quietly
+  stopped alarming would be worse than one that kept going.
 - `countdown_to` takes an ISO 8601 UTC instant. `countdown_secs` is converted
   to an absolute target when received, so it survives a restart.
 - Countdowns run through zero and keep counting negative (`-0:07`,
@@ -80,6 +94,7 @@ replies with the full status object:
              "content": { "kind": "countdown", "target": "2026-09-08T18:30:00Z",
                           "label": "House opens in", "display": "-0:42" } },
   "canned_id": null,
+  "flash": { "remaining_s": 1.8 },
   "uptime_secs": 8123,
   "version": "0.1.0",
   "build": "20260908053925",
@@ -90,6 +105,8 @@ replies with the full status object:
 - `content.kind` is `"text"` or `"countdown"`; `display` is the string
   currently on screen.
 - `canned_id` is set while the scene is an unmodified `canned` command.
+- `flash` is absent when the screen is steady, `{"remaining_s": N}` during a
+  timed flash, and `{"infinite": true}` during an endless one.
 - `build` is the release tag this binary was built from (`"dev"` for local
   builds) — the way to confirm an upgrade actually landed.
 
@@ -106,16 +123,19 @@ text needs no quoting).
 
 | Address | Args |
 |---|---|
-| `/placard/show` | `s text [s bg] [s fg] [i flash]` |
-| `/placard/canned` | `s id [s bg] [s fg] [i flash]` |
+| `/placard/show` | `s text [s bg] [s fg] [i flash \| f seconds]` |
+| `/placard/canned` | `s id [s bg] [s fg] [i flash \| f seconds]` |
 | `/placard/colour` | `s bg [s fg]` |
 | `/placard/countdown/to` | `s iso8601 [s label]` |
 | `/placard/countdown/secs` | `i secs [s label]` |
 | `/placard/clear` | — |
 
 After the leading string argument, colour strings are read in bg-then-fg
-order and a single int (or OSC boolean) anywhere in the tail is the flash
-flag — `s TEXT i 1` flashes without touching colours.
+order and a single numeric argument anywhere in the tail is the flash — so
+`s TEXT i 1` flashes without touching colours. OSC has no tables, so the
+argument type carries the meaning: an **int** (or OSC true/false) is the
+boolean form, a **float** is a number of seconds, and a negative float
+means no end.
 
 Every accepted message is acknowledged with `/placard/ok` to the sender's
 address and port; rejected ones with `/placard/error s reason`. Bundles are
@@ -128,7 +148,9 @@ Command-line examples (`oscsend` from liblo):
 oscsend localhost 9000 /placard/canned s house_open
 oscsend localhost 9000 /placard/show sss "STAND BY" 000000 ffffff
 oscsend localhost 9000 /placard/countdown/secs is 300 "House opens in"
-oscsend localhost 9000 /placard/show si "SHOW STOP" 1
+oscsend localhost 9000 /placard/show si "SHOW STOP" 1     # default 3 s
+oscsend localhost 9000 /placard/show sf "SHOW STOP" 10    # 10 seconds
+oscsend localhost 9000 /placard/show sf "SHOW STOP" -1    # until the next cue
 oscsend localhost 9000 /placard/clear
 ```
 

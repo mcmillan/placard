@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Command, CommandError};
 use crate::config::Config;
 use crate::render::RenderSpec;
-use crate::scene::{Content, Scene, format_clock};
+use crate::scene::{Content, Flash, Scene, format_clock};
 use crate::status::{self, StatusReport};
 
 /// Where the reply to a command goes. OSC acks are datagrams back to the
@@ -63,11 +63,24 @@ const HISTORY_RAW_CAP: usize = 512;
 /// its size stays bounded no matter how long the box runs.
 const HISTORY_COMPACT_EVERY: usize = HISTORY_CAP * 10;
 
-/// What survives a power cycle: the scene and where it came from.
+/// What survives a power cycle: the scene, where it came from, and whether
+/// it was flashing with no end. Timed flashes are transient attention-
+/// getters and are deliberately not persisted; an endless one is a state the
+/// operator chose and expects to still be there after a power blip.
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedState {
     scene: Scene,
     canned_id: Option<String>,
+    #[serde(default)]
+    flash_forever: bool,
+}
+
+/// A flash in progress. `duration` is `None` for one that runs until the
+/// next command.
+#[derive(Debug, Clone, Copy)]
+struct RunningFlash {
+    started: Instant,
+    duration: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,9 +102,7 @@ pub struct StateThread {
     history: std::collections::VecDeque<HistoryEntry>,
     history_path: PathBuf,
     history_appends: usize,
-    /// When a flash began; transient by design — a restart mid-flash comes
-    /// back with steady colours.
-    flash_started: Option<Instant>,
+    active_flash: Option<RunningFlash>,
     spec_tx: mpsc::Sender<RenderSpec>,
     /// Cloned OSC socket, used only to send `/placard/ok` / `/placard/error`.
     osc_socket: Option<UdpSocket>,
@@ -106,11 +117,12 @@ impl StateThread {
     ) -> StateThread {
         let state_path = state_dir.join("state.json");
         let history_path = state_dir.join("history.ndjson");
-        let (scene, canned_id) = match load_state(&state_path) {
-            Some(p) => (p.scene, p.canned_id),
+        let (scene, canned_id, flash_forever) = match load_state(&state_path) {
+            Some(p) => (p.scene, p.canned_id, p.flash_forever),
             None => (
                 boot_scene(&config),
                 Some(config.defaults.boot_scene.clone()),
+                false,
             ),
         };
         let (history, history_oversized) = load_history(&history_path);
@@ -125,7 +137,12 @@ impl StateThread {
             history,
             history_path,
             history_appends: 0,
-            flash_started: None,
+            // An endless flash resumes; its phase restarts, which is the
+            // only thing a reboot can't preserve and nobody can perceive.
+            active_flash: flash_forever.then(|| RunningFlash {
+                started: Instant::now(),
+                duration: None,
+            }),
             spec_tx,
             osc_socket,
         };
@@ -142,11 +159,7 @@ impl StateThread {
     pub fn run(mut self, rx: mpsc::Receiver<Envelope>) {
         self.push_if_changed();
         loop {
-            let tick = if self.flash_started.is_some() {
-                50
-            } else {
-                250
-            };
+            let tick = if self.active_flash.is_some() { 50 } else { 250 };
             match rx.recv_timeout(Duration::from_millis(tick)) {
                 Ok(envelope) => self.handle(envelope),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -178,6 +191,34 @@ impl StateThread {
             self.persist();
         }
         self.send_reply(envelope.reply, result);
+    }
+
+    fn start_flash(&mut self, flash: Flash) {
+        self.active_flash = match flash {
+            Flash::Off => None,
+            Flash::For(duration) => Some(RunningFlash {
+                started: Instant::now(),
+                duration: Some(duration),
+            }),
+            Flash::Forever => Some(RunningFlash {
+                started: Instant::now(),
+                duration: None,
+            }),
+        };
+    }
+
+    /// The flash as clients see it: absent when steady, otherwise how much
+    /// longer it runs.
+    fn flash_status(&self) -> Option<status::FlashStatus> {
+        let flash = self.active_flash?;
+        match flash.duration {
+            None => Some(status::FlashStatus::Forever { infinite: true }),
+            Some(duration) => Some(status::FlashStatus::Timed {
+                remaining_s: duration
+                    .saturating_sub(flash.started.elapsed())
+                    .as_secs_f64(),
+            }),
+        }
     }
 
     fn record(&mut self, envelope: &Envelope, error: Option<&CommandError>) {
@@ -260,7 +301,7 @@ impl StateThread {
     fn apply(&mut self, command: &Command) -> Result<Reply, CommandError> {
         let defaults = &self.config.defaults;
         if !matches!(command, Command::Status | Command::History) {
-            self.flash_started = None;
+            self.active_flash = None;
         }
         match command {
             Command::Show {
@@ -273,9 +314,7 @@ impl StateThread {
                 self.scene.fg = fg.unwrap_or(self.scene.fg);
                 self.scene.content = Content::Text { text: text.clone() };
                 self.canned_id = None;
-                if *flash {
-                    self.flash_started = Some(Instant::now());
-                }
+                self.start_flash(*flash);
             }
             Command::Canned { id, bg, fg, flash } => {
                 let canned = self
@@ -290,10 +329,9 @@ impl StateThread {
                         text: canned.text.clone(),
                     },
                 };
+                let flash = flash.unwrap_or(canned.flash);
                 self.canned_id = Some(id.clone());
-                if flash.unwrap_or(canned.flash) {
-                    self.flash_started = Some(Instant::now());
-                }
+                self.start_flash(flash);
             }
             Command::Colour { bg, fg } => {
                 self.scene.bg = bg.unwrap_or(self.scene.bg);
@@ -346,6 +384,7 @@ impl StateThread {
                     self.started.elapsed().as_secs(),
                     self.last_command.clone(),
                     Utc::now(),
+                    self.flash_status(),
                 )));
             }
         }
@@ -385,11 +424,14 @@ impl StateThread {
 
     /// Derive the displayed strings and push a spec only when one changed.
     fn push_if_changed(&mut self) {
-        let invert = match self.flash_started.map(|t| flash_invert(t.elapsed())) {
+        let invert = match self
+            .active_flash
+            .map(|f| flash_invert(f.started.elapsed(), f.duration))
+        {
             Some(Some(invert)) => invert,
             Some(None) => {
                 // Flash over; settle on the real colours and stop fast ticks.
-                self.flash_started = None;
+                self.active_flash = None;
                 false
             }
             None => false,
@@ -408,6 +450,7 @@ impl StateThread {
         let persisted = PersistedState {
             scene: self.scene.clone(),
             canned_id: self.canned_id.clone(),
+            flash_forever: matches!(self.active_flash, Some(RunningFlash { duration: None, .. })),
         };
         if let Err(err) = write_state(&self.state_path, &persisted) {
             tracing::error!(path = %self.state_path.display(), %err, "failed to persist state");
@@ -490,18 +533,16 @@ fn write_state(path: &Path, state: &PersistedState) -> anyhow::Result<()> {
 }
 
 const FLASH_PERIOD_MS: u128 = 500;
-const FLASH_TOTAL_MS: u128 = 3_000;
 
 /// Whether the colours are currently inverted, `elapsed` into a flash;
-/// `None` once the flash is over. Starts inverted for immediate attention
-/// and lands on the real colours: 6 half-second phases, even ones inverted.
-fn flash_invert(elapsed: Duration) -> Option<bool> {
-    let ms = elapsed.as_millis();
-    if ms >= FLASH_TOTAL_MS {
-        None
-    } else {
-        Some((ms / FLASH_PERIOD_MS).is_multiple_of(2))
+/// `None` once the flash is over (`duration` of `None` never is). Starts
+/// inverted for immediate attention and, for a timed flash, lands back on
+/// the real colours: half-second phases, even ones inverted.
+fn flash_invert(elapsed: Duration, duration: Option<Duration>) -> Option<bool> {
+    if duration.is_some_and(|d| elapsed >= d) {
+        return None;
     }
+    Some((elapsed.as_millis() / FLASH_PERIOD_MS).is_multiple_of(2))
 }
 
 /// Turn the scene into final on-screen strings. This is the only place
@@ -936,7 +977,7 @@ mod tests {
                 text: "GO".into(),
                 bg: None,
                 fg: None,
-                flash: false,
+                flash: Flash::Off,
             }),
             r#"{"cmd":"show","text":"GO"}"#,
         );
@@ -1083,7 +1124,7 @@ mod tests {
                     text: "SHOW STOP".into(),
                     bg: Some("8a0000".parse().unwrap()),
                     fg: Some("ffffff".parse().unwrap()),
-                    flash: true,
+                    flash: Flash::For(crate::scene::FLASH_DEFAULT),
                 }),
                 raw: r#"{"cmd":"show","text":"SHOW STOP","flash":true}"#.into(),
                 via: "tcp",
@@ -1116,8 +1157,75 @@ mod tests {
     }
 
     #[test]
+    fn endless_flash_never_settles_and_survives_a_restart() {
+        // No duration means no end, however long it has been running.
+        for ms in [0u64, 499, 500, 3_000, 86_400_000] {
+            assert!(
+                flash_invert(Duration::from_millis(ms), None).is_some(),
+                "an endless flash must still be flashing at {ms}ms"
+            );
+        }
+
+        let dir = std::env::temp_dir().join(format!("placard-flash-fvr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let mut state = StateThread::new(test_config(), &dir, spec_tx, None);
+
+        // A timed flash is transient: it must not persist.
+        let (env, _rx) = envelope(
+            Ok(Command::Show {
+                text: "BRIEF".into(),
+                bg: None,
+                fg: None,
+                flash: Flash::For(Duration::from_secs(3)),
+            }),
+            "",
+        );
+        state.handle(env);
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let reborn = StateThread::new(test_config(), &dir, spec_tx, None);
+        assert!(
+            reborn.active_flash.is_none(),
+            "a timed flash must not resume after a restart"
+        );
+
+        // An endless one is part of the state and must come back flashing.
+        let (env, _rx) = envelope(
+            Ok(Command::Show {
+                text: "SHOW STOP".into(),
+                bg: None,
+                fg: None,
+                flash: Flash::Forever,
+            }),
+            "",
+        );
+        state.handle(env);
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let mut reborn = StateThread::new(test_config(), &dir, spec_tx, None);
+        assert!(matches!(
+            reborn.active_flash,
+            Some(RunningFlash { duration: None, .. })
+        ));
+        assert!(matches!(
+            reborn.flash_status(),
+            Some(status::FlashStatus::Forever { .. })
+        ));
+
+        // And any later command ends it, in the restarted process too.
+        let (env, _rx) = envelope(Ok(Command::Clear), "");
+        reborn.handle(env);
+        assert!(reborn.active_flash.is_none());
+        let (spec_tx, _spec_rx) = mpsc::channel();
+        let after_clear = StateThread::new(test_config(), &dir, spec_tx, None);
+        assert!(after_clear.active_flash.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn flash_starts_inverted_and_settles_after_three_seconds() {
-        let at = |ms: u64| flash_invert(Duration::from_millis(ms));
+        let at =
+            |ms: u64| flash_invert(Duration::from_millis(ms), Some(crate::scene::FLASH_DEFAULT));
         assert_eq!(at(0), Some(true));
         assert_eq!(at(499), Some(true));
         assert_eq!(at(500), Some(false));
@@ -1164,6 +1272,7 @@ mod tests {
         let state = PersistedState {
             scene: scene_text("STAND BY"),
             canned_id: None,
+            flash_forever: false,
         };
         write_state(&path, &state).unwrap();
         let loaded = load_state(&path).unwrap();

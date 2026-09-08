@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rosc::{OscMessage, OscType};
 use serde::Deserialize;
 
-use crate::scene::Rgb;
+use crate::scene::{FLASH_DEFAULT, Flash, Rgb};
 
 /// The one command set all three transports (OSC, TCP, HTTP) normalise to.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -13,14 +13,14 @@ pub enum Command {
         bg: Option<Rgb>,
         fg: Option<Rgb>,
         #[serde(default)]
-        flash: bool,
+        flash: Flash,
     },
     Canned {
         id: String,
         bg: Option<Rgb>,
         fg: Option<Rgb>,
         /// None defers to the canned message's own `flash` config.
-        flash: Option<bool>,
+        flash: Option<Flash>,
     },
     Colour {
         bg: Option<Rgb>,
@@ -58,6 +58,8 @@ pub enum CommandError {
     BadTimestamp(String),
     #[error("unknown canned id {0:?}")]
     UnknownCanned(String),
+    #[error("{0}")]
+    BadFlash(String),
     #[error("invalid JSON: {0}")]
     BadJson(String),
     #[error("line exceeds 64 KiB")]
@@ -81,17 +83,17 @@ pub fn parse_osc(msg: &OscMessage) -> Result<Command, CommandError> {
     match msg.addr.as_str() {
         "/placard/show" => {
             let (text, bg, fg, flash) =
-                args.string_then_colours_and_flash("s text [s bg] [s fg] [i flash]")?;
+                args.string_then_colours_and_flash("s text [s bg] [s fg] [i flash | f seconds]")?;
             Ok(Command::Show {
                 text,
                 bg,
                 fg,
-                flash: flash.unwrap_or(false),
+                flash: flash.unwrap_or_default(),
             })
         }
         "/placard/canned" => {
             let (id, bg, fg, flash) =
-                args.string_then_colours_and_flash("s id [s bg] [s fg] [i flash]")?;
+                args.string_then_colours_and_flash("s id [s bg] [s fg] [i flash | f seconds]")?;
             Ok(Command::Canned { id, bg, fg, flash })
         }
         "/placard/colour" => {
@@ -200,23 +202,37 @@ impl<'a> OscArgs<'a> {
         }
     }
 
-    /// The `s text [s bg] [s fg] [i flash]` shape shared by show and canned.
-    /// After the leading string, remaining strings are colours in bg-then-fg
-    /// order and a single int or bool anywhere is the flash flag — so a cue
-    /// can flash without padding in colours it doesn't want to change.
+    /// The `s text [s bg] [s fg] [i flash | f seconds]` shape shared by show
+    /// and canned. After the leading string, remaining strings are colours in
+    /// bg-then-fg order and a single numeric argument anywhere is the flash —
+    /// so a cue can flash without padding in colours it doesn't want to
+    /// change. OSC has no tables, so the type carries the meaning: an int (or
+    /// OSC true/false) is the boolean form, a float is seconds with negative
+    /// meaning no end.
     #[allow(clippy::type_complexity)]
     fn string_then_colours_and_flash(
         &self,
         expected: &'static str,
-    ) -> Result<(String, Option<Rgb>, Option<Rgb>, Option<bool>), CommandError> {
+    ) -> Result<(String, Option<Rgb>, Option<Rgb>, Option<Flash>), CommandError> {
         let text = self.string(0, expected)?;
         let (mut bg, mut fg, mut flash) = (None, None, None);
+        let on_off = |on: bool| {
+            if on {
+                Flash::For(FLASH_DEFAULT)
+            } else {
+                Flash::Off
+            }
+        };
+        let seconds = |secs: f64| Flash::from_secs(secs).map_err(CommandError::BadFlash);
         for arg in self.args.iter().skip(1) {
             match arg {
                 OscType::String(s) if bg.is_none() => bg = Some(parse_colour(s.clone())?),
                 OscType::String(s) if fg.is_none() => fg = Some(parse_colour(s.clone())?),
-                OscType::Int(n) if flash.is_none() => flash = Some(*n != 0),
-                OscType::Bool(b) if flash.is_none() => flash = Some(*b),
+                OscType::Int(n) if flash.is_none() => flash = Some(on_off(*n != 0)),
+                OscType::Long(n) if flash.is_none() => flash = Some(on_off(*n != 0)),
+                OscType::Bool(b) if flash.is_none() => flash = Some(on_off(*b)),
+                OscType::Float(f) if flash.is_none() => flash = Some(seconds(f64::from(*f))?),
+                OscType::Double(d) if flash.is_none() => flash = Some(seconds(*d)?),
                 _ => return Err(self.wrong(expected)),
             }
         }
@@ -251,7 +267,7 @@ mod tests {
                 text: "STAND BY".into(),
                 bg: Some(rgb("#000000")),
                 fg: Some(rgb("#ffffff")),
-                flash: false,
+                flash: Flash::Off,
             }
         );
     }
@@ -265,7 +281,7 @@ mod tests {
                 text: "HELLO".into(),
                 bg: None,
                 fg: None,
-                flash: false,
+                flash: Flash::Off,
             }
         );
     }
@@ -340,7 +356,7 @@ mod tests {
                 text: "HELLO".into(),
                 bg: None,
                 fg: None,
-                flash: false,
+                flash: Flash::Off,
             }
         );
 
@@ -358,7 +374,7 @@ mod tests {
                 text: "GO".into(),
                 bg: Some(rgb("#0b6e2e")),
                 fg: Some(rgb("#ffffff")),
-                flash: false,
+                flash: Flash::Off,
             }
         );
     }
@@ -394,7 +410,7 @@ mod tests {
                 text: "SHOW STOP".into(),
                 bg: None,
                 fg: None,
-                flash: true,
+                flash: Flash::For(FLASH_DEFAULT),
             }
         );
         // Absent on canned means "use the canned message's own setting".
@@ -413,7 +429,7 @@ mod tests {
                 id: "go".into(),
                 bg: None,
                 fg: None,
-                flash: Some(false),
+                flash: Some(Flash::Off),
             }
         );
     }
@@ -431,7 +447,7 @@ mod tests {
                 text: "SHOW STOP".into(),
                 bg: None,
                 fg: None,
-                flash: true,
+                flash: Flash::For(FLASH_DEFAULT),
             }
         );
         // Colours and flash together, flag last.
@@ -449,7 +465,7 @@ mod tests {
                 id: "go".into(),
                 bg: Some(rgb("0b6e2e")),
                 fg: None,
-                flash: Some(true),
+                flash: Some(Flash::For(FLASH_DEFAULT)),
             }
         );
         // i 0 is an explicit "don't flash" override.
@@ -463,9 +479,43 @@ mod tests {
                 id: "show_stop".into(),
                 bg: None,
                 fg: None,
-                flash: Some(false),
+                flash: Some(Flash::Off),
             }
         );
+        // A float is seconds; negative is a flash with no end.
+        let m = osc(
+            "/placard/show",
+            vec![OscType::String("X".into()), OscType::Float(10.0)],
+        );
+        assert_eq!(
+            parse_osc(&m).unwrap(),
+            Command::Show {
+                text: "X".into(),
+                bg: None,
+                fg: None,
+                flash: Flash::For(std::time::Duration::from_secs(10)),
+            }
+        );
+        let m = osc(
+            "/placard/canned",
+            vec![OscType::String("show_stop".into()), OscType::Float(-1.0)],
+        );
+        assert_eq!(
+            parse_osc(&m).unwrap(),
+            Command::Canned {
+                id: "show_stop".into(),
+                bg: None,
+                fg: None,
+                flash: Some(Flash::Forever),
+            }
+        );
+        // An out-of-range float is rejected, not rounded or panicked on.
+        let m = osc(
+            "/placard/show",
+            vec![OscType::String("X".into()), OscType::Float(f32::NAN)],
+        );
+        assert!(matches!(parse_osc(&m), Err(CommandError::BadFlash(_))));
+
         // Two ints make no sense.
         let m = osc(
             "/placard/show",

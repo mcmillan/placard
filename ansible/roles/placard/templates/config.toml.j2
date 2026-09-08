@@ -32,7 +32,13 @@ bg = "{{ canned.bg }}"
 {% if canned.fg is defined %}
 fg = "{{ canned.fg }}"
 {% endif %}
-{% if canned.flash is defined and canned.flash %}
-flash = true
+{% if canned.flash is defined %}
+{# flash is true/false, a number of seconds, or a table (infinite/duration_s);
+   TOML inline tables are key = value, so a mapping can't just be to_json'd. #}
+{% if canned.flash is mapping %}
+flash = { {% for key, value in canned.flash.items() %}{{ key }} = {{ value | to_json }}{{ ", " if not loop.last }}{% endfor %} }
+{% else %}
+flash = {{ canned.flash | to_json }}
+{% endif %}
 {% endif %}
 {% endfor %}

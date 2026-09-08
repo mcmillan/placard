@@ -1,5 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,162 @@ impl<'de> Deserialize<'de> for Rgb {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let s = String::deserialize(de)?;
         s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// How a message flashes when it lands: not at all, for a fixed time, or
+/// until the next command replaces it.
+///
+/// On the wire (JSON body and TOML config alike) this accepts, in order of
+/// how often it's wanted:
+///
+/// | Value | Meaning |
+/// |---|---|
+/// | `true` | flash for the default 3 s |
+/// | `false` | don't flash |
+/// | `10` | flash for 10 seconds |
+/// | `{ duration_s = 10 }` | the same, spelled out |
+/// | `{ infinite = true }` | flash until the next command |
+/// | `-1` | the same, in scalar form (OSC has no tables) |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Flash {
+    #[default]
+    Off,
+    For(Duration),
+    /// Until another command replaces the scene. Unlike a timed flash this
+    /// is part of the state, not a transient effect, so it survives a
+    /// restart — an alarm that quietly stops alarming would be worse than
+    /// one that keeps going.
+    Forever,
+}
+
+/// What a bare `true` means.
+pub const FLASH_DEFAULT: Duration = Duration::from_secs(3);
+/// Longest explicit duration accepted; past this, say infinite and mean it.
+const FLASH_MAX_SECS: f64 = 86_400.0;
+
+impl Flash {
+    /// Seconds → `Flash`, the mapping shared by every transport: zero is
+    /// off, negative is forever, and anything unrepresentable is an error
+    /// rather than a panic in `Duration::from_secs_f64`.
+    pub fn from_secs(secs: f64) -> Result<Flash, String> {
+        if secs.is_nan() {
+            return Err("flash duration is not a number".into());
+        }
+        if secs < 0.0 {
+            return Ok(Flash::Forever);
+        }
+        if secs == 0.0 {
+            return Ok(Flash::Off);
+        }
+        if secs > FLASH_MAX_SECS {
+            return Err(format!(
+                "flash duration {secs}s is over the {FLASH_MAX_SECS}s maximum; \
+                 use infinite for a flash with no end"
+            ));
+        }
+        Ok(Flash::For(Duration::from_secs_f64(secs)))
+    }
+}
+
+impl<'de> Deserialize<'de> for Flash {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        de.deserialize_any(FlashVisitor)
+    }
+}
+
+struct FlashVisitor;
+
+impl<'de> serde::de::Visitor<'de> for FlashVisitor {
+    type Value = Flash;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "a boolean, a number of seconds (negative for no end), \
+             or a table with duration_s or infinite",
+        )
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Flash, E> {
+        Ok(if v {
+            Flash::For(FLASH_DEFAULT)
+        } else {
+            Flash::Off
+        })
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Flash, E> {
+        self.visit_f64(v as f64)
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Flash, E> {
+        self.visit_f64(v as f64)
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Flash, E> {
+        Flash::from_secs(v).map_err(E::custom)
+    }
+
+    /// Exactly one recognised key. Contradictions (`duration_s` *and*
+    /// `infinite`) and `infinite: false` are rejected with a message that
+    /// says what to write instead, rather than being silently resolved.
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Flash, A::Error> {
+        use serde::de::Error as _;
+        let mut flash: Option<Flash> = None;
+        while let Some(key) = map.next_key::<String>()? {
+            let value = match key.as_str() {
+                "duration_s" => {
+                    Flash::from_secs(map.next_value::<Seconds>()?.0).map_err(A::Error::custom)?
+                }
+                "infinite" => {
+                    if map.next_value::<bool>()? {
+                        Flash::Forever
+                    } else {
+                        return Err(A::Error::custom(
+                            "flash infinite = false is ambiguous; use flash = false to \
+                             turn flashing off, or give duration_s",
+                        ));
+                    }
+                }
+                other => {
+                    return Err(A::Error::custom(format!(
+                        "unknown flash field {other:?}, expected duration_s or infinite"
+                    )));
+                }
+            };
+            if flash.replace(value).is_some() {
+                return Err(A::Error::custom(
+                    "flash takes duration_s or infinite, not both",
+                ));
+            }
+        }
+        flash.ok_or_else(|| A::Error::custom("flash table needs duration_s or infinite"))
+    }
+}
+
+/// A number of seconds written as either an integer or a float — TOML and
+/// JSON both spell `10` and `10.0` differently and both must work.
+struct Seconds(f64);
+
+impl<'de> Deserialize<'de> for Seconds {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = Seconds;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a number of seconds")
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Seconds, E> {
+                Ok(Seconds(v as f64))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Seconds, E> {
+                Ok(Seconds(v as f64))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Seconds, E> {
+                Ok(Seconds(v))
+            }
+        }
+        de.deserialize_any(V)
     }
 }
 
@@ -263,6 +420,72 @@ mod tests {
             format_clock(after, chrono_tz::Tz::Europe__London),
             "02:00:00"
         );
+    }
+
+    fn flash_json(src: &str) -> Result<Flash, String> {
+        serde_json::from_str::<Flash>(src).map_err(|e| e.to_string())
+    }
+
+    /// The same value written as TOML, since config and commands share the
+    /// type and TOML spells integers differently from JSON.
+    fn flash_toml(src: &str) -> Result<Flash, String> {
+        #[derive(Deserialize)]
+        struct Holder {
+            flash: Flash,
+        }
+        toml::from_str::<Holder>(&format!("flash = {src}"))
+            .map(|h| h.flash)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn flash_accepts_bools_numbers_and_tables() {
+        for parse in [flash_json, flash_toml] {
+            assert_eq!(parse("true").unwrap(), Flash::For(FLASH_DEFAULT));
+            assert_eq!(parse("false").unwrap(), Flash::Off);
+            assert_eq!(parse("0").unwrap(), Flash::Off);
+            assert_eq!(parse("10").unwrap(), Flash::For(Duration::from_secs(10)));
+            assert_eq!(
+                parse("0.5").unwrap(),
+                Flash::For(Duration::from_millis(500))
+            );
+            assert_eq!(parse("-1").unwrap(), Flash::Forever);
+        }
+        // Tables: JSON objects and TOML inline tables.
+        assert_eq!(
+            flash_json(r#"{"duration_s": 10}"#).unwrap(),
+            Flash::For(Duration::from_secs(10))
+        );
+        assert_eq!(
+            flash_toml("{ duration_s = 10 }").unwrap(),
+            Flash::For(Duration::from_secs(10))
+        );
+        assert_eq!(flash_json(r#"{"infinite": true}"#).unwrap(), Flash::Forever);
+        assert_eq!(flash_toml("{ infinite = true }").unwrap(), Flash::Forever);
+    }
+
+    #[test]
+    fn flash_rejects_ambiguity_with_a_useful_message() {
+        // Contradictions and half-answers, not silently resolved.
+        let err = flash_json(r#"{"duration_s": 10, "infinite": true}"#).unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+
+        let err = flash_json(r#"{"infinite": false}"#).unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
+
+        let err = flash_json("{}").unwrap_err();
+        assert!(err.contains("needs duration_s or infinite"), "{err}");
+
+        let err = flash_json(r#"{"duraton_s": 10}"#).unwrap_err();
+        assert!(err.contains("unknown flash field"), "{err}");
+
+        // Over the cap: say infinite and mean it.
+        let err = flash_json("999999999").unwrap_err();
+        assert!(err.contains("maximum"), "{err}");
+
+        // Nothing here may panic Duration::from_secs_f64.
+        assert!(flash_json(r#""nope""#).is_err());
+        assert!(flash_json("[1]").is_err());
     }
 
     #[test]

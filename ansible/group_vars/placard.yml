@@ -50,7 +50,9 @@ placard_canned:
   show_stop:
     text: "SHOW STOP"
     bg: "8a0000"
-    flash: true
+    # true (3 s), a number of seconds, or { infinite: true } to flash until
+    # the next cue.
+    flash: { infinite: true }
   cans_on:
     text: "PUT YOUR CANS ON"
     bg: "1f4e9e"

@@ -19,10 +19,21 @@ pub struct StatusReport {
     pub ok: bool,
     pub scene: SceneStatus,
     pub canned_id: Option<String>,
+    /// Absent when steady; otherwise mirrors the shape a command sends, so
+    /// what you read back looks like what you'd write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flash: Option<FlashStatus>,
     pub uptime_secs: u64,
     pub version: &'static str,
     pub build: &'static str,
     pub last_command: Option<LastCommand>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(untagged)]
+pub enum FlashStatus {
+    Timed { remaining_s: f64 },
+    Forever { infinite: bool },
 }
 
 /// The scene as clients see it: content carries the derived `display` string.
@@ -39,6 +50,7 @@ pub fn report(
     uptime_secs: u64,
     last_command: Option<LastCommand>,
     now: DateTime<Utc>,
+    flash: Option<FlashStatus>,
 ) -> StatusReport {
     let mut content = match serde_json::to_value(&scene.content) {
         Ok(v) => v,
@@ -55,6 +67,7 @@ pub fn report(
             content,
         },
         canned_id,
+        flash,
         uptime_secs,
         version: env!("CARGO_PKG_VERSION"),
         build: BUILD,
@@ -78,7 +91,7 @@ mod tests {
             },
         };
         let now = "2026-09-08T18:30:42Z".parse().unwrap();
-        let report = report(&scene, None, 8123, None, now);
+        let report = report(&scene, None, 8123, None, now, None);
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["ok"], true);
         assert_eq!(json["scene"]["bg"], "8a0000");
@@ -103,6 +116,7 @@ mod tests {
             1,
             None,
             "2026-09-08T18:30:00Z".parse().unwrap(),
+            Some(FlashStatus::Forever { infinite: true }),
         ))
         .unwrap();
         assert_eq!(json["scene"]["content"]["kind"], "text");
