@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # glibc and GStreamer must match the target box exactly (DESIGN.md §11).
+    container: debian:trixie
+    permissions:
+      contents: write
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential curl ca-certificates pkg-config git \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            fonts-inter fontconfig
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain stable --profile minimal --component clippy,rustfmt
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Lint and test (goldens included)
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          PLACARD_GOLDENS=1 cargo test
+
+      - name: Build .deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb
+          DEB=$(ls target/debian/placard_*.deb)
+          sha256sum "$DEB" > "$DEB.sha256"
+          echo "DEB=$DEB" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.DEB }}
+            ${{ env.DEB }}.sha256

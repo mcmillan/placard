@@ -1,0 +1,74 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - chrony
+      - ca-certificates
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Pin kernel cmdline (quiet console, 1080p mode)
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: >-
+      GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=0 consoleblank=0
+      vt.global_cursor_default=0 video=HDMI-A-1:1920x1080@{{ hdmi_rate }}D"
+  notify:
+    - Update grub
+    - Reboot for cmdline
+
+- name: Mask getty on tty1 so nothing contends for the console
+  ansible.builtin.systemd_service:
+    name: getty@tty1.service
+    masked: true
+
+- name: Create systemd drop-in directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/systemd/system.conf.d
+    - /etc/systemd/journald.conf.d
+
+- name: Arm the hardware watchdog
+  ansible.builtin.copy:
+    dest: /etc/systemd/system.conf.d/10-watchdog.conf
+    content: |
+      [Manager]
+      RuntimeWatchdogSec=30
+    mode: "0644"
+  notify: Reexec systemd
+
+- name: Cap journald so logs cannot fill the disk
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-cap.conf
+    content: |
+      [Journal]
+      SystemMaxUse=200M
+    mode: "0644"
+  notify: Restart journald
+
+- name: Point chrony at the venue NTP server with pool fallback
+  ansible.builtin.copy:
+    dest: /etc/chrony/sources.d/placard.sources
+    content: |
+      server {{ ntp_server }} iburst prefer
+      pool pool.ntp.org iburst
+    mode: "0644"
+  notify: Restart chrony
+
+- name: SSH is key-only
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-placard.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+    mode: "0644"
+  notify: Restart sshd
+
+- name: System timezone stays UTC (on-screen clock timezone is app config)
+  community.general.timezone:
+    name: Etc/UTC

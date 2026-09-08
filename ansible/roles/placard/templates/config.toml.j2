@@ -1,0 +1,35 @@
+# Managed by Ansible — edit group_vars/placard.yml, not this file.
+
+[display]
+width = {{ placard_display.width }}
+height = {{ placard_display.height }}
+fps = {{ hdmi_rate }}                # matches the kernel video= rate; both come from hdmi_rate
+font = "{{ placard_display.font }}"
+padding_x = {{ placard_display.padding_x }}
+padding_y = {{ placard_display.padding_y }}
+
+[net]
+osc_port = {{ placard_net.osc_port }}
+tcp_port = {{ placard_net.tcp_port }}
+http_port = {{ placard_net.http_port }}
+
+[clock]
+timezone = "{{ placard_timezone }}"
+font = "{{ placard_clock.font }}"
+position = "{{ placard_clock.position }}"
+
+[defaults]
+bg = "{{ placard_defaults.bg }}"
+fg = "{{ placard_defaults.fg }}"
+boot_scene = "{{ placard_defaults.boot_scene }}"
+{% for id, canned in placard_canned.items() %}
+
+[canned.{{ id }}]
+text = "{{ canned.text }}"
+{% if canned.bg is defined %}
+bg = "{{ canned.bg }}"
+{% endif %}
+{% if canned.fg is defined %}
+fg = "{{ canned.fg }}"
+{% endif %}
+{% endfor %}

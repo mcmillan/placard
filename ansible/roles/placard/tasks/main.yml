@@ -1,0 +1,32 @@
+---
+- name: Download the pinned release .deb (checksum-verified)
+  ansible.builtin.get_url:
+    url: "https://github.com/{{ placard_repo }}/releases/download/v{{ placard_version }}/placard_{{ placard_version }}_amd64.deb"
+    checksum: "sha256:https://github.com/{{ placard_repo }}/releases/download/v{{ placard_version }}/placard_{{ placard_version }}_amd64.deb.sha256"
+    dest: "/var/cache/placard_{{ placard_version }}_amd64.deb"
+    mode: "0644"
+  register: placard_deb
+
+- name: Install placard (apt resolves the GStreamer runtime dependencies)
+  ansible.builtin.apt:
+    deb: "/var/cache/placard_{{ placard_version }}_amd64.deb"
+  when: placard_deb is changed or placard_force_install | default(false)
+  notify: Restart placard
+
+- name: Pin the installed version against accidental apt changes
+  ansible.builtin.dpkg_selections:
+    name: placard
+    selection: hold
+
+- name: Template /etc/placard/config.toml
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: /etc/placard/config.toml
+    mode: "0644"
+  notify: Restart placard
+
+- name: Enable and start placard
+  ansible.builtin.systemd_service:
+    name: placard
+    enabled: true
+    state: started

@@ -1,0 +1,7 @@
+---
+- name: Provision placard appliances
+  hosts: placard
+  become: true
+  roles:
+    - base
+    - placard

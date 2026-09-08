@@ -1,0 +1,5 @@
+---
+- name: Restart placard
+  ansible.builtin.systemd_service:
+    name: placard
+    state: restarted
