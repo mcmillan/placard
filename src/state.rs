@@ -512,18 +512,20 @@ pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config, invert: b
     // (plain-text lines for size fitting, final markup)
     let (fit_lines, text_markup) = match &scene.content {
         Content::Text { text } => (
-            text.lines()
+            clamp_display(text)
+                .lines()
                 .map(|l| FitLine {
                     text: l.to_string(),
                     scale: 1.0,
                 })
                 .collect(),
-            glib::markup_escape_text(text).to_string(),
+            glib::markup_escape_text(&clamp_display(text)).to_string(),
         ),
         Content::Countdown { target, label } => {
             let digits = crate::scene::format_countdown(*target, now);
             match label {
                 Some(label) => {
+                    let label = clamp_display(label);
                     // The label can contain newlines, which render as real
                     // line breaks — each one must count towards the height
                     // or the fit underestimates and textoverlay culls.
@@ -542,7 +544,7 @@ pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config, invert: b
                         lines,
                         format!(
                             "<span size=\"60%\">{}</span>\n{digits}",
-                            glib::markup_escape_text(label)
+                            glib::markup_escape_text(&label)
                         ),
                     )
                 }
@@ -581,6 +583,31 @@ struct FitLine {
 const LINE_H: f64 = 1.25;
 const MIN_FONT_PX: u32 = 8;
 const SPACE_EM: f64 = 0.30;
+/// Bounds on what reaches the renderer. A 1080p frame at `MIN_FONT_PX`
+/// provably fits this much even in the worst glyph case; without a bound,
+/// thousands of newlines or one enormous unbroken word build a layout no
+/// font size can fit — and `textoverlay` culls over-tall layouts to a blank
+/// frame.
+const MAX_DISPLAY_LINES: usize = 40;
+const MAX_DISPLAY_CHARS: usize = 4_000;
+
+/// Truncate degenerate input for display, with an ellipsis. The scene (and
+/// so state.json and `/api/status`) keeps the full text; only the on-screen
+/// string is clamped.
+fn clamp_display(text: &str) -> std::borrow::Cow<'_, str> {
+    let mut lines = 0usize;
+    for (count, (idx, c)) in text.char_indices().enumerate() {
+        if c == '\n' {
+            lines += 1;
+        }
+        if count >= MAX_DISPLAY_CHARS || lines >= MAX_DISPLAY_LINES {
+            let mut out = text[..idx].to_string();
+            out.push('…');
+            return std::borrow::Cow::Owned(out);
+        }
+    }
+    std::borrow::Cow::Borrowed(text)
+}
 
 /// Per-character advance estimate for Inter Bold, in em, deliberately on the
 /// wide side of reality: overestimating width only makes text smaller, while
@@ -617,11 +644,16 @@ fn wrapped_line_count(text: &str, em_px: f64, usable_w: f64) -> usize {
         let gap = if first { 0.0 } else { space };
         first = false;
         if w > usable_w {
-            // Char-broken long word: fills the rest of this line, then whole
-            // lines, then leaves a remainder.
-            let extra = ((cur + gap + w) / usable_w).ceil().max(1.0) as usize;
-            lines += extra - 1;
-            cur = (cur + gap + w) - (extra - 1) as f64 * usable_w;
+            // Pango's wordchar mode moves a too-long word to a fresh line
+            // and char-breaks it there. Unreachable while fit_font_px
+            // requires the longest word to fit, but modelled correctly so a
+            // future relaxation of that rule doesn't inherit a wrong count.
+            if cur > 0.0 {
+                lines += 1;
+            }
+            let full = (w / usable_w).ceil().max(1.0) as usize;
+            lines += full - 1;
+            cur = w - (full - 1) as f64 * usable_w;
         } else if cur + gap + w <= usable_w {
             cur += gap + w;
         } else {
@@ -795,6 +827,48 @@ mod tests {
             wide < narrow,
             "wide-glyph text must be sized smaller ({wide} vs {narrow})"
         );
+    }
+
+    #[test]
+    fn degenerate_input_is_clamped_instead_of_blanking() {
+        let cfg = test_config();
+        // Hundreds of newlines: without the clamp no font size fits and
+        // textoverlay would cull the whole layout.
+        let spec = derive_spec(&scene_text(&"a\n".repeat(300)), t0(), &cfg, false);
+        assert!(spec.text_markup.lines().count() <= MAX_DISPLAY_LINES);
+        assert!(spec.text_markup.ends_with('…'));
+
+        // One enormous unbroken word.
+        let spec = derive_spec(&scene_text(&"W".repeat(60_000)), t0(), &cfg, false);
+        assert!(spec.text_markup.chars().count() <= MAX_DISPLAY_CHARS + 1);
+        assert!(spec.text_markup.ends_with('…'));
+
+        // A degenerate label too.
+        let scene = Scene {
+            bg: Rgb::BLACK,
+            fg: "ffffff".parse().unwrap(),
+            content: Content::Countdown {
+                target: t0() + TimeDelta::seconds(90),
+                label: Some("x\n".repeat(300)),
+            },
+        };
+        let spec = derive_spec(&scene, t0(), &cfg, false);
+        assert!(spec.text_markup.lines().count() <= MAX_DISPLAY_LINES + 2);
+
+        // Ordinary text is untouched — no ellipsis, no allocation surprises.
+        let spec = derive_spec(&scene_text("KILL ALL HUMANS"), t0(), &cfg, false);
+        assert_eq!(spec.text_markup, "KILL ALL HUMANS");
+    }
+
+    #[test]
+    fn long_words_wrap_onto_fresh_lines_in_the_model() {
+        // A word wider than the frame starts on its own line, as Pango does:
+        // 0.4 of a line used, then a 2.5-line word → 1 + 3 = 4 lines.
+        let usable = 1000.0;
+        // "aaaaa" = 5 × 0.8em × 100px = 400px; 25 W's = 25 × 1.0em × 100px
+        // = 2500px = a fresh line plus 2 more.
+        let text = format!("aaaaa {}", "W".repeat(25));
+        assert_eq!(super::wrapped_line_count(&text, 100.0, usable), 4);
     }
 
     #[test]

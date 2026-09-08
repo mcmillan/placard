@@ -146,3 +146,6 @@ Text is rendered literally: `<b>` in a cue shows as `<b>`, never as markup.
 Long text word-wraps and auto-shrinks to fit inside the configured padding;
 the font size in `[display].font` is the maximum, used whenever the text
 fits. A countdown's label renders above the digits at 60 % of their size.
+Text beyond 4,000 characters or 40 lines is truncated with an ellipsis on
+screen — no input can produce a layout that fails to render — while the
+scene, `state.json` and `status` keep the full text.

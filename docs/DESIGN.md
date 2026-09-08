@@ -116,7 +116,7 @@ One binary, `placard`, one process, three threads:
                                                └─▶ state.json (atomic write)
 ```
 
-- **Listeners** parse their wire format into a `Command` and send it on an `mpsc` channel. Parse errors are logged and dropped; they never reach the renderer.
+- **Listeners** parse their wire format into a `Command`; successes and parse failures alike go onto an `mpsc` channel, so the state thread can record every inbound message in the history and route the reply. Nothing malformed ever reaches the renderer.
 - **State thread** owns the single source of truth (`Scene`), applies commands, persists on every change, and pushes a `RenderSpec` to the render thread. It also owns a 250 ms ticker that re-derives the countdown string and the wall-clock string, and only pushes a new spec when a displayed string actually changes (i.e. once a second).
 - **Render thread** runs the GLib main loop, applies `RenderSpec`s as property sets, watches the GStreamer bus, and sends the systemd watchdog heartbeat once per second.
 
@@ -126,7 +126,7 @@ Any GStreamer bus error, thread panic (`panic = "abort"`), or lost heartbeat ter
 
 - **No async runtime touches GStreamer.** The render thread runs a `glib::MainLoop` and nothing else. If tokio is used for the network listeners, it lives on its own thread(s) and communicates with the state thread over `std::sync::mpsc` only.
 - The state thread is plain `std::thread` with a `recv_timeout` loop (250 ms) that doubles as the ticker.
-- Channels: `mpsc::Sender<(Command, ReplyTo)>` into the state thread; `mpsc::Sender<RenderSpec>` into the render thread. `ReplyTo` is an enum (`Osc(SocketAddr)`, `Oneshot(Sender<Result>)`, `None`) so acks route back to the right transport.
+- Channels: `mpsc::Sender<(Command, ReplyTo)>` into the state thread; `mpsc::Sender<RenderSpec>` into the render thread. `ReplyTo` is an enum (`Osc(SocketAddr)`, `Oneshot(Sender<Result>)`) so acks route back to the right transport.
 - No `unwrap`/`expect` on network input or config-derived values in the state or render threads. `unwrap` on programmer invariants is fine.
 
 ## 6. Data model and command set

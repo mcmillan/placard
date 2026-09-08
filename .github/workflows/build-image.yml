@@ -32,5 +32,8 @@ jobs:
         run: |
           IMAGE=ghcr.io/${{ github.repository_owner }}/placard-build
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker build -t "$IMAGE:latest" -f Dockerfile.build .
+          # Explicit platform: the release job consuming this image runs on
+          # amd64, and a cached base image must never decide the arch
+          # silently (e.g. if this job ever moves to an arm runner).
+          docker build --platform linux/amd64 -t "$IMAGE:latest" -f Dockerfile.build .
           docker push "$IMAGE:latest"
