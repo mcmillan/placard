@@ -46,9 +46,9 @@ verifies the checksum, installs it and restarts the service. Running it
 again with no new release reports zero changes.
 
 To roll back — or hold a box on a known-good build through a show run — set
-`placard_release` (inventory or group_vars) to a specific short-sha release
-tag, e.g. `placard_release: "e0c6a7b"`, and re-run. Set it back to `latest`
-to resume tracking.
+`placard_release` (inventory or group_vars) to a specific release tag,
+e.g. `placard_release: "20260908053513"`, and re-run. Set it back to
+`latest` to resume tracking.
 
 ## Changing canned messages
 
@@ -69,9 +69,9 @@ Anything that goes to a venue goes through a CI release and Ansible.
 
 Every push to `main` is a release. CI builds in a trixie container, runs the
 full test suite including golden images, and attaches the `.deb` + `.sha256`
-to a GitHub Release tagged with the commit's short sha (e.g. `e0c6a7b`,
-containing `placard_0.1.0+e0c6a7b_amd64.deb`). Ansible installs whatever
-release is latest unless `placard_release` pins a tag.
+to a GitHub Release tagged with the UTC build time (e.g. `20260908053513`,
+containing `placard_0.1.0+20260908053513_amd64.deb`). Ansible installs
+whatever release is latest unless `placard_release` pins a tag.
 
 ## Remaining hardware verification (M3–M5)
 

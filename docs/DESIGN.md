@@ -403,7 +403,7 @@ No other crates without a stated reason in the PR. In particular: no `glib`-asyn
 
 ### CI
 
-`release.yml`, on every push to `main` (released under the commit's short sha as tag; the .deb is versioned `<cargo-version>+<short-sha>`):
+`release.yml`, on every push to `main` (released under a UTC timestamp tag, `YYYYMMDDHHMMSS`; the .deb is versioned `<cargo-version>+<timestamp>`):
 
 1. Runs in a `debian:trixie` container so glibc and GStreamer headers match the target exactly.
 2. `cargo test`, `cargo clippy -D warnings`.
@@ -442,7 +442,7 @@ Local development is on macOS; see §14.
 
 ### Upgrading
 
-Run the playbook; it installs the latest release. Rollback: set `placard_release` to a short-sha tag and run it again. The playbook is idempotent; running it with no new release does nothing.
+Run the playbook; it installs the latest release. Rollback: set `placard_release` to a release tag and run it again. The playbook is idempotent; running it with no new release does nothing.
 
 ### Changing canned messages
 

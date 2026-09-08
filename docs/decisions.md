@@ -50,7 +50,7 @@ Companion to `DESIGN.md`. This file records *why*; `DESIGN.md` records *what*. N
 
 **Build in a `debian:trixie` container**, including for local `linux-bin`. Cross-compiling Rust against Linux GStreamer headers from macOS is possible and miserable, and CI already does it correctly in two minutes.
 
-**Ansible tracks the latest release** (revisited from "pin a version"): every push to main releases, so the newest release is by definition what's meant to be deployed, and boxes shouldn't lag it silently. Rollback and show-run freezes still work by setting `placard_release` to a short-sha tag. Hand-editing config on the box works but drifts; documented as such.
+**Ansible tracks the latest release** (revisited from "pin a version"): every push to main releases, so the newest release is by definition what's meant to be deployed, and boxes shouldn't lag it silently. Rollback and show-run freezes still work by setting `placard_release` to a release tag. Hand-editing config on the box works but drifts; documented as such.
 
 ## Behaviour
 

@@ -80,11 +80,11 @@ images above come from.
 
 Every push to `main` is a release: CI builds in a trixie container, runs the
 full suite including golden images, and attaches a checksummed `.deb` to a
-GitHub Release tagged with the commit's short sha.
+GitHub Release tagged with the UTC build time (`YYYYMMDDHHMMSS`).
 
 Boxes are provisioned by Ansible from a stock Debian 13 netinst — kernel
 cmdline, chrony, watchdog, templated config, and whatever release is latest.
-Re-run the playbook to upgrade; pin `placard_release` to a short-sha tag to
+Re-run the playbook to upgrade; pin `placard_release` to a release tag to
 roll back or hold a box. See [docs/deploy.md](docs/deploy.md).
 
 ## Documentation
