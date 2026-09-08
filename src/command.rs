@@ -47,7 +47,7 @@ pub enum CommandError {
         addr: String,
         expected: &'static str,
     },
-    #[error("bad colour: {0}")]
+    #[error("{0}")]
     BadColour(String),
     #[error("bad timestamp {0:?}: expected ISO 8601, e.g. 2026-09-08T19:30:00Z")]
     BadTimestamp(String),
