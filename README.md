@@ -96,3 +96,10 @@ roll back or hold a box. See [docs/deploy.md](docs/deploy.md).
 | [docs/deploy.md](docs/deploy.md) | Provisioning, upgrades, bench workflow |
 | [docs/decisions.md](docs/decisions.md) | Why it is the way it is |
 | [CLAUDE.md](CLAUDE.md) | Rules for implementers, human or otherwise |
+
+## Provenance
+
+This project is entirely LLM-written: the design docs, every line of code,
+the tests, CI, provisioning and this README were produced by Claude (Fable
+5) working under human direction and review. The human contributions are
+the requirements, the taste, and the decisions about what not to build.
