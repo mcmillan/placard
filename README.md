@@ -69,8 +69,10 @@ make test   # fmt, clippy -D warnings, unit + integration tests
 QLab on the same Mac can fire the real cue stack at `localhost` before any
 hardware exists. Rendering fidelity is asserted only on Linux:
 `make goldens` regenerates the reference PNGs inside the same
-`debian:trixie` container CI uses (`--platform linux/amd64`; needs Docker or
-podman).
+`debian:trixie` image CI uses, running natively on your host architecture
+(needs Docker or podman) — cross-architecture rendering is verified within
+the golden tolerance, and CI re-asserts on amd64 every push. Only
+`make linux-bin` is pinned to amd64, because the box is.
 
 `placard --snapshot scene.json out.png` renders one frame of a scene
 fixture through the real pipeline — that's what the golden tests and the
