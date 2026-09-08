@@ -403,7 +403,7 @@ No other crates without a stated reason in the PR. In particular: no `glib`-asyn
 
 ### CI
 
-`release.yml`, on every push to `main` (versioned `<cargo-version>-<run-number>`, e.g. `0.1.0-37`, released under the tag `v0.1.0-37`):
+`release.yml`, on every push to `main` (released under the commit's short sha as tag; the .deb is versioned `<cargo-version>+<short-sha>`):
 
 1. Runs in a `debian:trixie` container so glibc and GStreamer headers match the target exactly.
 2. `cargo test`, `cargo clippy -D warnings`.
@@ -426,14 +426,13 @@ Local development is on macOS; see §14.
      hosts:
        placard-01:
          ansible_host: 192.168.10.50
-         placard_version: "0.3.1"
          hdmi_rate: 50
    ```
 4. `ansible-playbook -i inventory site.yml`. The playbook:
    - installs base packages and chrony;
    - sets the kernel cmdline and runs `update-grub`;
    - masks `getty@tty1`, sets the systemd hardware watchdog, caps journald;
-   - downloads the pinned `.deb` from GitHub Releases, verifies the checksum, installs it;
+   - downloads the latest release `.deb` from GitHub (or the tag pinned by `placard_release`), verifies the checksum, installs it;
    - templates `config.toml` (canned messages come from `group_vars`);
    - enables and starts `placard.service`;
    - reboots if the cmdline changed.
@@ -443,7 +442,7 @@ Local development is on macOS; see §14.
 
 ### Upgrading
 
-Bump `placard_version` in inventory, run the playbook. Downgrades are the same operation with an older version. The playbook is idempotent; running it with no changes does nothing.
+Run the playbook; it installs the latest release. Rollback: set `placard_release` to a short-sha tag and run it again. The playbook is idempotent; running it with no new release does nothing.
 
 ### Changing canned messages
 

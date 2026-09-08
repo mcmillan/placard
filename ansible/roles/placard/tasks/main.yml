@@ -1,15 +1,30 @@
 ---
-- name: Download the pinned release .deb (checksum-verified)
+- name: Look up the release to install
+  ansible.builtin.uri:
+    url: >-
+      {{ 'https://api.github.com/repos/' + placard_repo + '/releases/latest'
+         if placard_release == 'latest'
+         else 'https://api.github.com/repos/' + placard_repo + '/releases/tags/' + placard_release }}
+    return_content: true
+  register: placard_release_info
+  check_mode: false
+
+- name: Resolve the .deb and checksum assets
+  ansible.builtin.set_fact:
+    placard_deb_asset: "{{ placard_release_info.json.assets | selectattr('name', 'search', '\\.deb$') | first }}"
+    placard_sha_asset: "{{ placard_release_info.json.assets | selectattr('name', 'search', '\\.sha256$') | first }}"
+
+- name: "Download {{ placard_deb_asset.name | default('placard .deb') }} (checksum-verified)"
   ansible.builtin.get_url:
-    url: "https://github.com/{{ placard_repo }}/releases/download/v{{ placard_version }}/placard_{{ placard_version }}_amd64.deb"
-    checksum: "sha256:https://github.com/{{ placard_repo }}/releases/download/v{{ placard_version }}/placard_{{ placard_version }}_amd64.deb.sha256"
-    dest: "/var/cache/placard_{{ placard_version }}_amd64.deb"
+    url: "{{ placard_deb_asset.browser_download_url }}"
+    checksum: "sha256:{{ placard_sha_asset.browser_download_url }}"
+    dest: "/var/cache/{{ placard_deb_asset.name }}"
     mode: "0644"
   register: placard_deb
 
 - name: Install placard (apt resolves the GStreamer runtime dependencies)
   ansible.builtin.apt:
-    deb: "/var/cache/placard_{{ placard_version }}_amd64.deb"
+    deb: "/var/cache/{{ placard_deb_asset.name }}"
   when: placard_deb is changed or placard_force_install | default(false)
   notify: Restart placard
 

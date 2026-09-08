@@ -2,6 +2,10 @@
 # GitHub repo the .deb is released from (owner/name).
 placard_repo: mcmillan/placard
 
+# Which release to install: "latest" tracks the newest release; set a
+# specific short-sha tag (e.g. "e0c6a7b") to roll back or hold a box.
+placard_release: latest
+
 # LAN NTP server; pool.ntp.org remains as fallback. Override per venue.
 ntp_server: 192.168.10.1
 

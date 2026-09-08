@@ -79,13 +79,13 @@ images above come from.
 ## Releasing and deploying
 
 Every push to `main` is a release: CI builds in a trixie container, runs the
-full suite including golden images, and attaches a versioned, checksummed
-`.deb` (e.g. `placard_0.1.0-42_amd64.deb`) to a GitHub Release.
+full suite including golden images, and attaches a checksummed `.deb` to a
+GitHub Release tagged with the commit's short sha.
 
 Boxes are provisioned by Ansible from a stock Debian 13 netinst — kernel
-cmdline, chrony, watchdog, the pinned `.deb`, templated config. Bump
-`placard_version` in the inventory and re-run the playbook to upgrade or
-roll back. See [docs/deploy.md](docs/deploy.md).
+cmdline, chrony, watchdog, templated config, and whatever release is latest.
+Re-run the playbook to upgrade; pin `placard_release` to a short-sha tag to
+roll back or hold a box. See [docs/deploy.md](docs/deploy.md).
 
 ## Documentation
 

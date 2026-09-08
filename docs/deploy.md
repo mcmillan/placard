@@ -18,7 +18,6 @@ wrong (§12 of `DESIGN.md`).
      hosts:
        placard-01:
          ansible_host: 192.168.10.50
-         placard_version: "0.1.0-37"
          hdmi_rate: 50
    ```
    `hdmi_rate` sets both the kernel `video=` mode and `display.fps` in
@@ -31,7 +30,7 @@ wrong (§12 of `DESIGN.md`).
    ```
    It installs base packages and chrony, pins the kernel cmdline (1080p mode,
    quiet console), masks `getty@tty1`, arms the hardware watchdog, caps
-   journald, downloads and installs the pinned .deb (checksum-verified),
+   journald, downloads and installs the latest release .deb (checksum-verified),
    templates `/etc/placard/config.toml`, enables the service, and reboots if
    the cmdline changed.
 5. **Verify**: the screen shows HOUSE CLOSED (the boot scene);
@@ -40,11 +39,16 @@ wrong (§12 of `DESIGN.md`).
    operator action. This step is not optional.
 7. `dd` the disk to a golden image; keep it with the spare box.
 
-## Upgrading / downgrading
+## Upgrading / rolling back
 
-Bump (or lower) `placard_version` in the inventory, re-run the playbook. It
-downloads that release, verifies the checksum, installs it, restarts the
-service. Running the playbook with no changes reports zero changes.
+Re-run the playbook: it asks GitHub for the latest release, downloads it,
+verifies the checksum, installs it and restarts the service. Running it
+again with no new release reports zero changes.
+
+To roll back — or hold a box on a known-good build through a show run — set
+`placard_release` (inventory or group_vars) to a specific short-sha release
+tag, e.g. `placard_release: "e0c6a7b"`, and re-run. Set it back to `latest`
+to resume tracking.
 
 ## Changing canned messages
 
@@ -64,10 +68,10 @@ Anything that goes to a venue goes through a CI release and Ansible.
 ## Releasing
 
 Every push to `main` is a release. CI builds in a trixie container, runs the
-full test suite including golden images, and attaches
-`placard_<ver>_amd64.deb` + `.sha256` to a GitHub Release tagged
-`v<cargo-version>-<run-number>` (e.g. `v0.1.0-37`). That artefact is what
-Ansible pins: set `placard_version: "0.1.0-37"` in the inventory.
+full test suite including golden images, and attaches the `.deb` + `.sha256`
+to a GitHub Release tagged with the commit's short sha (e.g. `e0c6a7b`,
+containing `placard_0.1.0+e0c6a7b_amd64.deb`). Ansible installs whatever
+release is latest unless `placard_release` pins a tag.
 
 ## Remaining hardware verification (M3–M5)
 
