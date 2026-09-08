@@ -15,37 +15,29 @@ concurrency:
 # what the steps use. contents:write covers checkout plus creating the
 # release, its tag and its assets; pull-requests:read is for
 # `gh release create --generate-notes`, which summarises the pull requests
-# behind each commit and 403s the whole create call without it. The cache
-# step uses the runner's cache service, not this token.
+# behind each commit and 403s the whole create call without it;
+# packages:read pulls the build container from GHCR. The cache step uses
+# the runner's cache service, not this token.
 permissions:
   contents: write
   pull-requests: read
+  packages: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # glibc and GStreamer must match the target box (Debian 13) exactly.
-    container: debian:trixie
+    # The prebuilt build environment (Dockerfile.build via build-image.yml):
+    # trixie so glibc and GStreamer match the target box, with the toolchain
+    # and cargo-deb baked in — per-run compilation is the project only.
+    container:
+      image: ghcr.io/mcmillan/placard-build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     steps:
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential curl ca-certificates pkg-config git gh \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad gstreamer1.0-x \
-            fonts-inter fontconfig
+      - uses: actions/checkout@v7
 
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-            sh -s -- -y --default-toolchain stable --profile minimal --component clippy,rustfmt
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -61,7 +53,6 @@ jobs:
 
       - name: Build .deb
         run: |
-          cargo install cargo-deb --locked
           BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           VERSION="$BASE-$GITHUB_RUN_NUMBER"
           cargo deb --deb-version "$VERSION"
