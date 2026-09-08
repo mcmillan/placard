@@ -1,8 +1,15 @@
 name: release
 
+# Every push to main releases a .deb. The version is Cargo.toml's version
+# plus the run number (e.g. 0.1.0-37), so each release is unique and Ansible
+# can pin it without anyone hand-tagging.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -47,10 +54,14 @@ jobs:
       - name: Build .deb
         run: |
           cargo install cargo-deb --locked
-          cargo deb
+          BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          VERSION="$BASE-$GITHUB_RUN_NUMBER"
+          cargo deb --deb-version "$VERSION"
           DEB=$(ls target/debian/placard_*.deb)
-          sha256sum "$DEB" > "$DEB.sha256"
+          # Bare filename in the .sha256 so Ansible's checksum URL matches.
+          (cd target/debian && sha256sum "$(basename "$DEB")" > "$(basename "$DEB").sha256")
           echo "DEB=$DEB" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       # No third-party actions: release via the GitHub CLI (Debian's gh
       # package) with the workflow's own token.
@@ -59,5 +70,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          gh release create "$GITHUB_REF_NAME" "$DEB" "$DEB.sha256" \
-            --title "$GITHUB_REF_NAME" --generate-notes
+          gh release create "v$VERSION" "$DEB" "$DEB.sha256" \
+            --title "v$VERSION" --target "$GITHUB_SHA" --generate-notes

@@ -397,11 +397,11 @@ No other crates without a stated reason in the PR. In particular: no `glib`-asyn
 | `goldens` | Regenerate `tests/golden/*.png` inside the trixie container |
 | `linux-bin` | Release build inside `debian:trixie` via Docker; output `target/linux/placard` |
 | `deploy-dev` | `scp` that binary to `$BOX`, `systemctl restart placard`, tail the journal |
-| `release` | `git tag v$(VERSION) && git push --tags`; CI does the rest |
+| `release` | `git push origin main`; every push to main releases, CI does the rest |
 
 ### CI
 
-`release.yml`, on tag `v*`:
+`release.yml`, on every push to `main` (versioned `<cargo-version>-<run-number>`, e.g. `0.1.0-37`, released under the tag `v0.1.0-37`):
 
 1. Runs in a `debian:trixie` container so glibc and GStreamer headers match the target exactly.
 2. `cargo test`, `cargo clippy -D warnings`.
@@ -507,14 +507,14 @@ QLab runs on the same Mac, so the real cue stack can be built and fired at `loca
 
 ### Building for the target
 
-Not from the Mac. Cross-compiling Rust against Linux GStreamer headers is possible and miserable; the payoff is nil because CI does it in the right container in under two minutes. For a faster-than-tag loop when working on the box:
+Not from the Mac. Cross-compiling Rust against Linux GStreamer headers is possible and miserable; the payoff is nil because CI does it in the right container in under two minutes. For a faster-than-release loop when working on the box:
 
 ```
 make linux-bin     # cargo build --release inside debian:trixie via Docker/OrbStack, cargo cache in a volume
 make deploy-dev    # scp target/linux/placard to the box, systemctl restart placard
 ```
 
-`deploy-dev` is for bench iteration only. Anything that goes to a venue goes through a tagged release and Ansible (§12).
+`deploy-dev` is for bench iteration only. Anything that goes to a venue goes through a CI release and Ansible (§12).
 
 ### Bench setup
 
@@ -545,7 +545,7 @@ Each milestone is done when every line in its "done when" list is true. `make te
 **M3 — Packaging**
 - `cargo deb` produces a `.deb` that installs on a clean trixie with `apt install ./placard_*.deb` and nothing else.
 - `systemctl status placard` shows `Type=notify` healthy; `kill -STOP` on the process gets it restarted by the watchdog within 15 s.
-- Pushing a `v*` tag produces a GitHub Release with the `.deb` and checksum.
+- Pushing to `main` produces a GitHub Release with the `.deb` and checksum.
 
 **M4 — Provisioning**
 - `ansible-playbook site.yml` against a fresh netinst box brings it to a working appliance with no manual steps after the SSH key.

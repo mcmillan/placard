@@ -18,7 +18,7 @@ wrong (§12 of `DESIGN.md`).
      hosts:
        placard-01:
          ansible_host: 192.168.10.50
-         placard_version: "0.1.0"
+         placard_version: "0.1.0-37"
          hdmi_rate: 50
    ```
    `hdmi_rate` sets both the kernel `video=` mode and `display.fps` in
@@ -59,17 +59,15 @@ BOX=placard-01 make deploy-dev
 ```
 
 `deploy-dev` scps the binary straight onto the box and restarts the service.
-Anything that goes to a venue goes through a tagged release and Ansible.
+Anything that goes to a venue goes through a CI release and Ansible.
 
 ## Releasing
 
-```
-make release       # tags v$(VERSION) from Cargo.toml, pushes the tag
-```
-
-CI builds in a trixie container, runs the full test suite including golden
-images, and attaches `placard_<ver>_amd64.deb` + `.sha256` to a GitHub
-Release. That artefact is what Ansible pins.
+Every push to `main` is a release. CI builds in a trixie container, runs the
+full test suite including golden images, and attaches
+`placard_<ver>_amd64.deb` + `.sha256` to a GitHub Release tagged
+`v<cargo-version>-<run-number>` (e.g. `v0.1.0-37`). That artefact is what
+Ansible pins: set `placard_version: "0.1.0-37"` in the inventory.
 
 ## Remaining hardware verification (M3–M5)
 

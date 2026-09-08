@@ -37,6 +37,6 @@ deploy-dev: linux-bin
 	scp target/linux/placard root@$(BOX):/usr/bin/placard.new
 	ssh root@$(BOX) 'mv /usr/bin/placard.new /usr/bin/placard && systemctl restart placard && journalctl -u placard -f'
 
+# Every push to main releases; this is just the explicit spelling of that.
 release:
-	git tag v$(VERSION)
-	git push --tags
+	git push origin main
