@@ -31,7 +31,7 @@ Before you say a task is complete:
 ## Working style
 
 - **Code comments must stand alone.** No references to `DESIGN.md` sections, milestones, or the conversation that produced the code ("per the spec", "M2 will use this", "as discussed"). A comment earns its place only by telling a future reader something the code can't. Pointing at living reference docs a client would read (`docs/protocol.md`) is fine.
-- **Commit messages describe the change, not the process.** No milestone numbers, no design-doc section references, no session narrative — none of that means anything in five years. Say what changed and why it changed.
+- **Commit messages describe the change, not the process.** No milestone numbers, no design-doc section references, no session narrative — none of that means anything in five years. Say what changed and why it changed. Subjects are at most 80 characters; detail goes in the body.
 - Small commits, one concern each. Milestone order from `DESIGN.md` §16; don't start M2 features while M1 is red.
 - Don't restructure files or rename things in `DESIGN.md` §11 without asking. The layout is part of the spec.
 - Prefer boring code. A `match` over a trait object; a `struct` over a builder; a plain loop over an iterator chain if it's clearer.
