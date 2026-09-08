@@ -1,0 +1,29 @@
+name: build-image
+
+# Rebuilds the CI/build container only when its definition changes. The
+# release workflow runs inside this image so it never apt-installs a
+# toolchain or compiles cargo-deb per run.
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile.build, .github/workflows/build-image.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IMAGE=ghcr.io/${{ github.repository_owner }}/placard-build
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build -t "$IMAGE:latest" -f Dockerfile.build .
+          docker push "$IMAGE:latest"
