@@ -89,6 +89,9 @@ pub struct Canned {
     pub text: String,
     pub bg: Option<Rgb>,
     pub fg: Option<Rgb>,
+    /// Invert fg/bg every 500 ms for 3 s whenever this message is cued.
+    #[serde(default)]
+    pub flash: bool,
 }
 
 impl Config {

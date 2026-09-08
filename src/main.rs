@@ -134,7 +134,7 @@ fn snapshot(config: &Config, scene_path: &Path, out_path: &Path) -> anyhow::Resu
         .with_context(|| format!("parsing fixture {}", scene_path.display()))?;
 
     let renderer = Renderer::build(config, SinkKind::Png, Some(out_path))?;
-    let spec = state::derive_spec(&fixture.scene, fixture.now, config);
+    let spec = state::derive_spec(&fixture.scene, fixture.now, config, false);
     renderer.apply(&spec);
 
     // Keep the sender alive so the render loop doesn't treat a closed channel

@@ -12,11 +12,15 @@ pub enum Command {
         text: String,
         bg: Option<Rgb>,
         fg: Option<Rgb>,
+        #[serde(default)]
+        flash: bool,
     },
     Canned {
         id: String,
         bg: Option<Rgb>,
         fg: Option<Rgb>,
+        /// None defers to the canned message's own `flash` config.
+        flash: Option<bool>,
     },
     Colour {
         bg: Option<Rgb>,
@@ -71,12 +75,19 @@ pub fn parse_osc(msg: &OscMessage) -> Result<Command, CommandError> {
     let args = OscArgs::new(&msg.addr, &msg.args);
     match msg.addr.as_str() {
         "/placard/show" => {
-            let (text, bg, fg) = args.string_then_colours("s text [s bg] [s fg]")?;
-            Ok(Command::Show { text, bg, fg })
+            let (text, bg, fg, flash) =
+                args.string_then_colours_and_flash("s text [s bg] [s fg] [i flash]")?;
+            Ok(Command::Show {
+                text,
+                bg,
+                fg,
+                flash: flash.unwrap_or(false),
+            })
         }
         "/placard/canned" => {
-            let (id, bg, fg) = args.string_then_colours("s id [s bg] [s fg]")?;
-            Ok(Command::Canned { id, bg, fg })
+            let (id, bg, fg, flash) =
+                args.string_then_colours_and_flash("s id [s bg] [s fg] [i flash]")?;
+            Ok(Command::Canned { id, bg, fg, flash })
         }
         "/placard/colour" => {
             let expected = "s bg [s fg]";
@@ -183,22 +194,27 @@ impl<'a> OscArgs<'a> {
         }
     }
 
-    /// The `s text [s bg] [s fg]` shape shared by show and canned.
-    fn string_then_colours(
+    /// The `s text [s bg] [s fg] [i flash]` shape shared by show and canned.
+    /// After the leading string, remaining strings are colours in bg-then-fg
+    /// order and a single int or bool anywhere is the flash flag — so a cue
+    /// can flash without padding in colours it doesn't want to change.
+    #[allow(clippy::type_complexity)]
+    fn string_then_colours_and_flash(
         &self,
         expected: &'static str,
-    ) -> Result<(String, Option<Rgb>, Option<Rgb>), CommandError> {
+    ) -> Result<(String, Option<Rgb>, Option<Rgb>, Option<bool>), CommandError> {
         let text = self.string(0, expected)?;
-        let bg = self
-            .optional_string(1, expected)?
-            .map(parse_colour)
-            .transpose()?;
-        let fg = self
-            .optional_string(2, expected)?
-            .map(parse_colour)
-            .transpose()?;
-        self.no_more(3, expected)?;
-        Ok((text, bg, fg))
+        let (mut bg, mut fg, mut flash) = (None, None, None);
+        for arg in self.args.iter().skip(1) {
+            match arg {
+                OscType::String(s) if bg.is_none() => bg = Some(parse_colour(s.clone())?),
+                OscType::String(s) if fg.is_none() => fg = Some(parse_colour(s.clone())?),
+                OscType::Int(n) if flash.is_none() => flash = Some(*n != 0),
+                OscType::Bool(b) if flash.is_none() => flash = Some(*b),
+                _ => return Err(self.wrong(expected)),
+            }
+        }
+        Ok((text, bg, fg, flash))
     }
 }
 
@@ -229,6 +245,7 @@ mod tests {
                 text: "STAND BY".into(),
                 bg: Some(rgb("#000000")),
                 fg: Some(rgb("#ffffff")),
+                flash: false,
             }
         );
     }
@@ -241,7 +258,8 @@ mod tests {
             Command::Show {
                 text: "HELLO".into(),
                 bg: None,
-                fg: None
+                fg: None,
+                flash: false,
             }
         );
     }
@@ -315,7 +333,8 @@ mod tests {
             Command::Show {
                 text: "HELLO".into(),
                 bg: None,
-                fg: None
+                fg: None,
+                flash: false,
             }
         );
 
@@ -333,6 +352,7 @@ mod tests {
                 text: "GO".into(),
                 bg: Some(rgb("#0b6e2e")),
                 fg: Some(rgb("#ffffff")),
+                flash: false,
             }
         );
     }
@@ -345,7 +365,8 @@ mod tests {
             Command::Canned {
                 id: "go".into(),
                 bg: None,
-                fg: None
+                fg: None,
+                flash: None,
             }
         );
 
@@ -357,6 +378,98 @@ mod tests {
                 fg: None
             }
         );
+    }
+
+    #[test]
+    fn json_flash() {
+        assert_eq!(
+            parse_json(r#"{ "cmd": "show", "text": "SHOW STOP", "flash": true }"#).unwrap(),
+            Command::Show {
+                text: "SHOW STOP".into(),
+                bg: None,
+                fg: None,
+                flash: true,
+            }
+        );
+        // Absent on canned means "use the canned message's own setting".
+        assert_eq!(
+            parse_json(r#"{ "cmd": "canned", "id": "go" }"#).unwrap(),
+            Command::Canned {
+                id: "go".into(),
+                bg: None,
+                fg: None,
+                flash: None,
+            }
+        );
+        assert_eq!(
+            parse_json(r#"{ "cmd": "canned", "id": "go", "flash": false }"#).unwrap(),
+            Command::Canned {
+                id: "go".into(),
+                bg: None,
+                fg: None,
+                flash: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn osc_flash() {
+        // Flash without colours: no padding args needed.
+        let m = osc(
+            "/placard/show",
+            vec![OscType::String("SHOW STOP".into()), OscType::Int(1)],
+        );
+        assert_eq!(
+            parse_osc(&m).unwrap(),
+            Command::Show {
+                text: "SHOW STOP".into(),
+                bg: None,
+                fg: None,
+                flash: true,
+            }
+        );
+        // Colours and flash together, flag last.
+        let m = osc(
+            "/placard/canned",
+            vec![
+                OscType::String("go".into()),
+                OscType::String("0b6e2e".into()),
+                OscType::Int(1),
+            ],
+        );
+        assert_eq!(
+            parse_osc(&m).unwrap(),
+            Command::Canned {
+                id: "go".into(),
+                bg: Some(rgb("0b6e2e")),
+                fg: None,
+                flash: Some(true),
+            }
+        );
+        // i 0 is an explicit "don't flash" override.
+        let m = osc(
+            "/placard/canned",
+            vec![OscType::String("show_stop".into()), OscType::Int(0)],
+        );
+        assert_eq!(
+            parse_osc(&m).unwrap(),
+            Command::Canned {
+                id: "show_stop".into(),
+                bg: None,
+                fg: None,
+                flash: Some(false),
+            }
+        );
+        // Two ints make no sense.
+        let m = osc(
+            "/placard/show",
+            vec![
+                OscType::String("X".into()),
+                OscType::Int(1),
+                OscType::Int(1),
+            ],
+        );
+        assert!(matches!(parse_osc(&m), Err(CommandError::WrongArgs { .. })));
     }
 
     #[test]

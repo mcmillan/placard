@@ -59,6 +59,9 @@ pub struct StateThread {
     last_command: Option<LastCommand>,
     started: Instant,
     last_pushed: Option<RenderSpec>,
+    /// When a flash began; transient by design — a restart mid-flash comes
+    /// back with steady colours.
+    flash_started: Option<Instant>,
     spec_tx: mpsc::Sender<RenderSpec>,
     /// Cloned OSC socket, used only to send `/placard/ok` / `/placard/error`.
     osc_socket: Option<UdpSocket>,
@@ -87,17 +90,25 @@ impl StateThread {
             last_command: None,
             started: Instant::now(),
             last_pushed: None,
+            flash_started: None,
             spec_tx,
             osc_socket,
         }
     }
 
-    /// The state thread proper: a recv_timeout loop whose 250 ms timeout
-    /// doubles as the ticker that re-derives countdown and clock strings.
+    /// The state thread proper: a recv_timeout loop whose timeout doubles as
+    /// the ticker that re-derives countdown and clock strings. The tick
+    /// tightens while a flash is running so the 500 ms colour swaps land
+    /// close to their boundaries.
     pub fn run(mut self, rx: mpsc::Receiver<Envelope>) {
         self.push_if_changed();
         loop {
-            match rx.recv_timeout(Duration::from_millis(250)) {
+            let tick = if self.flash_started.is_some() {
+                50
+            } else {
+                250
+            };
+            match rx.recv_timeout(Duration::from_millis(tick)) {
                 Ok(envelope) => self.handle(envelope),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -121,17 +132,30 @@ impl StateThread {
         self.send_reply(envelope.reply, result);
     }
 
-    /// Apply a command to the scene. Errors leave the scene untouched.
+    /// Apply a command to the scene. Errors leave the scene untouched. Any
+    /// scene-changing command ends a running flash; show/canned may start a
+    /// new one.
     fn apply(&mut self, command: &Command) -> Result<Reply, CommandError> {
         let defaults = &self.config.defaults;
+        if !matches!(command, Command::Status) {
+            self.flash_started = None;
+        }
         match command {
-            Command::Show { text, bg, fg } => {
+            Command::Show {
+                text,
+                bg,
+                fg,
+                flash,
+            } => {
                 self.scene.bg = bg.unwrap_or(self.scene.bg);
                 self.scene.fg = fg.unwrap_or(self.scene.fg);
                 self.scene.content = Content::Text { text: text.clone() };
                 self.canned_id = None;
+                if *flash {
+                    self.flash_started = Some(Instant::now());
+                }
             }
-            Command::Canned { id, bg, fg } => {
+            Command::Canned { id, bg, fg, flash } => {
                 let canned = self
                     .config
                     .canned
@@ -145,6 +169,9 @@ impl StateThread {
                     },
                 };
                 self.canned_id = Some(id.clone());
+                if flash.unwrap_or(canned.flash) {
+                    self.flash_started = Some(Instant::now());
+                }
             }
             Command::Colour { bg, fg } => {
                 self.scene.bg = bg.unwrap_or(self.scene.bg);
@@ -232,7 +259,16 @@ impl StateThread {
 
     /// Derive the displayed strings and push a spec only when one changed.
     fn push_if_changed(&mut self) {
-        let spec = derive_spec(&self.scene, Utc::now(), &self.config);
+        let invert = match self.flash_started.map(|t| flash_invert(t.elapsed())) {
+            Some(Some(invert)) => invert,
+            Some(None) => {
+                // Flash over; settle on the real colours and stop fast ticks.
+                self.flash_started = None;
+                false
+            }
+            None => false,
+        };
+        let spec = derive_spec(&self.scene, Utc::now(), &self.config, invert);
         if self.last_pushed.as_ref() != Some(&spec) {
             if self.spec_tx.send(spec.clone()).is_err() {
                 // Render thread is gone; the process is coming down anyway.
@@ -298,10 +334,26 @@ fn write_state(path: &Path, state: &PersistedState) -> anyhow::Result<()> {
     Ok(())
 }
 
+const FLASH_PERIOD_MS: u128 = 500;
+const FLASH_TOTAL_MS: u128 = 3_000;
+
+/// Whether the colours are currently inverted, `elapsed` into a flash;
+/// `None` once the flash is over. Starts inverted for immediate attention
+/// and lands on the real colours: 6 half-second phases, even ones inverted.
+fn flash_invert(elapsed: Duration) -> Option<bool> {
+    let ms = elapsed.as_millis();
+    if ms >= FLASH_TOTAL_MS {
+        None
+    } else {
+        Some((ms / FLASH_PERIOD_MS).is_multiple_of(2))
+    }
+}
+
 /// Turn the scene into final on-screen strings. This is the only place
 /// network/config text meets Pango markup: everything is escaped here, and
 /// the `<span>` label wrapper is the only markup the code itself adds.
-pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config) -> RenderSpec {
+/// `invert` swaps fg/bg (the flash effect); the scene keeps its real colours.
+pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config, invert: bool) -> RenderSpec {
     // (plain-text lines for size fitting, final markup)
     let (fit_lines, text_markup) = match &scene.content {
         Content::Text { text } => (
@@ -344,9 +396,9 @@ pub fn derive_spec(scene: &Scene, now: DateTime<Utc>, config: &Config) -> Render
     };
     let d = &config.display;
     RenderSpec {
-        bg_argb: scene.bg.to_argb(0xff),
+        bg_argb: if invert { scene.fg } else { scene.bg }.to_argb(0xff),
         text_markup,
-        text_argb: scene.fg.to_argb(0xff),
+        text_argb: if invert { scene.bg } else { scene.fg }.to_argb(0xff),
         text_px: fit_font_px(
             &fit_lines,
             d.max_font_px(),
@@ -456,7 +508,7 @@ mod tests {
 
     #[test]
     fn derive_escapes_markup_in_text() {
-        let spec = derive_spec(&scene_text("<b>&\"</b>"), t0(), &test_config());
+        let spec = derive_spec(&scene_text("<b>&\"</b>"), t0(), &test_config(), false);
         assert_eq!(spec.text_markup, "&lt;b&gt;&amp;&quot;&lt;/b&gt;");
     }
 
@@ -470,7 +522,7 @@ mod tests {
                 label: Some("Doors <open>".into()),
             },
         };
-        let spec = derive_spec(&scene, t0(), &test_config());
+        let spec = derive_spec(&scene, t0(), &test_config(), false);
         assert_eq!(
             spec.text_markup,
             "<span size=\"60%\">Doors &lt;open&gt;</span>\n1:30"
@@ -488,21 +540,21 @@ mod tests {
             },
         };
         assert_eq!(
-            derive_spec(&scene, t0(), &test_config()).text_markup,
+            derive_spec(&scene, t0(), &test_config(), false).text_markup,
             "-0:07"
         );
     }
 
     #[test]
     fn short_text_gets_max_size() {
-        let spec = derive_spec(&scene_text("GO"), t0(), &test_config());
+        let spec = derive_spec(&scene_text("GO"), t0(), &test_config(), false);
         assert_eq!(spec.text_px, test_config().display.max_font_px());
     }
 
     #[test]
     fn long_text_shrinks_and_never_hits_the_floor() {
         let text = "KILL ALL HUMANS, KILL ALL HUMANS, MUST KILL ALL HUMANS... ".repeat(7);
-        let spec = derive_spec(&scene_text(&text), t0(), &test_config());
+        let spec = derive_spec(&scene_text(&text), t0(), &test_config(), false);
         let max = test_config().display.max_font_px();
         assert!(spec.text_px < max, "400 chars must shrink below {max}");
         assert!(spec.text_px > MIN_FONT_PX, "must stay readable");
@@ -513,7 +565,7 @@ mod tests {
         let cfg = test_config();
         let sizes: Vec<u32> = [1usize, 4, 16, 64, 256]
             .iter()
-            .map(|n| derive_spec(&scene_text(&"HUMANS ".repeat(*n)), t0(), &cfg).text_px)
+            .map(|n| derive_spec(&scene_text(&"HUMANS ".repeat(*n)), t0(), &cfg, false).text_px)
             .collect();
         let mut sorted = sizes.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
@@ -522,9 +574,85 @@ mod tests {
 
     #[test]
     fn unbreakable_word_is_bounded_by_width() {
-        let spec = derive_spec(&scene_text(&"M".repeat(60)), t0(), &test_config());
+        let spec = derive_spec(&scene_text(&"M".repeat(60)), t0(), &test_config(), false);
         // 60 chars at 0.68 advance must fit in 1728 usable px.
         assert!(f64::from(spec.text_px) * AVG_CHAR_W * 60.0 <= 1728.0);
+    }
+
+    #[test]
+    fn flash_show_toggles_specs_through_the_state_thread() {
+        let dir = std::env::temp_dir().join(format!("placard-flash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (spec_tx, spec_rx) = mpsc::channel();
+        let (env_tx, env_rx) = mpsc::channel();
+        let state = StateThread::new(test_config(), &dir, spec_tx, None);
+        let thread = std::thread::spawn(move || state.run(env_rx));
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        env_tx
+            .send(Envelope {
+                command: Command::Show {
+                    text: "SHOW STOP".into(),
+                    bg: Some("8a0000".parse().unwrap()),
+                    fg: Some("ffffff".parse().unwrap()),
+                    flash: true,
+                },
+                via: "tcp",
+                from: None,
+                reply: ReplyTo::Oneshot(reply_tx),
+            })
+            .unwrap();
+        assert!(matches!(reply_rx.recv().unwrap(), Ok(Reply::Ok)));
+
+        // Collect specs across two-plus flash phases: both polarities must
+        // appear for this text.
+        let deadline = Instant::now() + Duration::from_millis(1200);
+        let (mut saw_inverted, mut saw_normal) = (false, false);
+        while Instant::now() < deadline {
+            if let Ok(spec) = spec_rx.recv_timeout(Duration::from_millis(100))
+                && spec.text_markup == "SHOW STOP"
+            {
+                match (spec.bg_argb, spec.text_argb) {
+                    (0xffffffff, 0xff8a0000) => saw_inverted = true,
+                    (0xff8a0000, 0xffffffff) => saw_normal = true,
+                    other => panic!("unexpected colours {other:x?}"),
+                }
+            }
+        }
+        drop(env_tx);
+        thread.join().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(saw_inverted, "never saw inverted colours during the flash");
+        assert!(saw_normal, "never saw normal colours during the flash");
+    }
+
+    #[test]
+    fn flash_starts_inverted_and_settles_after_three_seconds() {
+        let at = |ms: u64| flash_invert(Duration::from_millis(ms));
+        assert_eq!(at(0), Some(true));
+        assert_eq!(at(499), Some(true));
+        assert_eq!(at(500), Some(false));
+        assert_eq!(at(999), Some(false));
+        assert_eq!(at(1000), Some(true));
+        assert_eq!(at(2500), Some(false));
+        assert_eq!(at(2999), Some(false));
+        assert_eq!(at(3000), None);
+        assert_eq!(at(60_000), None);
+    }
+
+    #[test]
+    fn derive_invert_swaps_colours_only() {
+        let scene = Scene {
+            bg: "8a0000".parse().unwrap(),
+            fg: "ffffff".parse().unwrap(),
+            content: Content::Text { text: "X".into() },
+        };
+        let normal = derive_spec(&scene, t0(), &test_config(), false);
+        let inverted = derive_spec(&scene, t0(), &test_config(), true);
+        assert_eq!(inverted.bg_argb, normal.text_argb);
+        assert_eq!(inverted.text_argb, normal.bg_argb);
+        assert_eq!(inverted.text_markup, normal.text_markup);
+        assert_eq!(inverted.text_px, normal.text_px);
     }
 
     #[test]
@@ -534,7 +662,7 @@ mod tests {
             fg: "#ffffff".parse().unwrap(),
             content: Content::Text { text: "X".into() },
         };
-        let spec = derive_spec(&scene, t0(), &test_config());
+        let spec = derive_spec(&scene, t0(), &test_config(), false);
         assert_eq!(spec.bg_argb, 0xff8a0000);
         assert_eq!(spec.text_argb, 0xffffffff);
     }

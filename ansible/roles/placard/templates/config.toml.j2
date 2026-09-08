@@ -32,4 +32,7 @@ bg = "{{ canned.bg }}"
 {% if canned.fg is defined %}
 fg = "{{ canned.fg }}"
 {% endif %}
+{% if canned.flash is defined and canned.flash %}
+flash = true
+{% endif %}
 {% endfor %}

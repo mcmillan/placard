@@ -25,8 +25,10 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
 
 ```json
 { "cmd": "show", "text": "STAND BY", "bg": "000000", "fg": "ffffff" }
+{ "cmd": "show", "text": "SHOW STOP", "flash": true }
 { "cmd": "canned", "id": "go" }
 { "cmd": "canned", "id": "go", "bg": "0b6e2e" }
+{ "cmd": "canned", "id": "show_stop", "flash": false }
 { "cmd": "colour", "bg": "8a0000" }
 { "cmd": "countdown_to", "target": "2026-09-08T19:30:00Z", "label": "House opens in" }
 { "cmd": "countdown_secs", "secs": 300, "label": "House opens in" }
@@ -36,6 +38,11 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
 
 - `bg`/`fg` are optional everywhere; omitted means "keep the current colour"
   (for `canned`, the canned message's own colours, then `[defaults]`).
+- `flash: true` inverts fg and bg every 500 ms for 3 seconds when the
+  message lands, then settles on the real colours. Canned messages can set
+  `flash = true` in config to always do this; the command's own `flash`
+  overrides it either way. The effect is transient — it does not survive a
+  restart and any later command ends it early.
 - `countdown_to` takes an ISO 8601 UTC instant. `countdown_secs` is converted
   to an absolute target when received, so it survives a restart.
 - Countdowns run through zero and keep counting negative (`-0:07`,
@@ -91,12 +98,16 @@ text needs no quoting).
 
 | Address | Args |
 |---|---|
-| `/placard/show` | `s text [s bg] [s fg]` |
-| `/placard/canned` | `s id [s bg] [s fg]` |
+| `/placard/show` | `s text [s bg] [s fg] [i flash]` |
+| `/placard/canned` | `s id [s bg] [s fg] [i flash]` |
 | `/placard/colour` | `s bg [s fg]` |
 | `/placard/countdown/to` | `s iso8601 [s label]` |
 | `/placard/countdown/secs` | `i secs [s label]` |
 | `/placard/clear` | — |
+
+After the leading string argument, colour strings are read in bg-then-fg
+order and a single int (or OSC boolean) anywhere in the tail is the flash
+flag — `s TEXT i 1` flashes without touching colours.
 
 Every accepted message is acknowledged with `/placard/ok` to the sender's
 address and port; rejected ones with `/placard/error s reason`. Bundles are
@@ -109,6 +120,7 @@ Command-line examples (`oscsend` from liblo):
 oscsend localhost 9000 /placard/canned s house_open
 oscsend localhost 9000 /placard/show s "STAND BY" s 000000 s ffffff
 oscsend localhost 9000 /placard/countdown/secs i 300 s "House opens in"
+oscsend localhost 9000 /placard/show s "SHOW STOP" i 1
 oscsend localhost 9000 /placard/clear
 ```
 

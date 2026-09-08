@@ -155,8 +155,8 @@ Colours are `rrggbb` strings on the wire. Canned messages are named `Scene`s in 
 
 | Command | Effect |
 |---|---|
-| `show { text, bg?, fg? }` | Arbitrary text; colours default to current |
-| `canned { id, bg?, fg? }` | Load a canned scene |
+| `show { text, bg?, fg?, flash? }` | Arbitrary text; colours default to current; `flash` inverts fg/bg every 500 ms for 3 s |
+| `canned { id, bg?, fg?, flash? }` | Load a canned scene; `flash` overrides the canned message's own setting |
 | `colour { bg?, fg? }` | Change colours, keep content |
 | `countdown_to { target, label?, bg?, fg? }` | Countdown to ISO 8601 UTC instant |
 | `countdown_secs { secs, label?, bg?, fg? }` | Converted to an absolute target at receipt, then identical to above |
@@ -177,8 +177,8 @@ Wall clock: `HH:MM:SS` in the configured timezone, bottom-right, updated once a 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
-    Show          { text: String, bg: Option<Rgb>, fg: Option<Rgb> },
-    Canned        { id: String, bg: Option<Rgb>, fg: Option<Rgb> },
+    Show          { text: String, bg: Option<Rgb>, fg: Option<Rgb>, flash: bool },
+    Canned        { id: String, bg: Option<Rgb>, fg: Option<Rgb>, flash: Option<bool> },
     Colour        { bg: Option<Rgb>, fg: Option<Rgb> },
     CountdownTo   { target: DateTime<Utc>, label: Option<String>, bg: Option<Rgb>, fg: Option<Rgb> },
     CountdownSecs { secs: u32, label: Option<String>, bg: Option<Rgb>, fg: Option<Rgb> },
@@ -221,8 +221,8 @@ Examples:
 
 | Address | Args |
 |---|---|
-| `/placard/show` | `s text` `[s bg] [s fg]` |
-| `/placard/canned` | `s id` `[s bg] [s fg]` |
+| `/placard/show` | `s text` `[s bg] [s fg] [i flash]` |
+| `/placard/canned` | `s id` `[s bg] [s fg] [i flash]` |
 | `/placard/colour` | `s bg` `[s fg]` |
 | `/placard/countdown/to` | `s iso8601` `[s label]` |
 | `/placard/countdown/secs` | `i secs` `[s label]` |
@@ -328,6 +328,7 @@ bg = "0b6e2e"
 [canned.show_stop]
 text = "SHOW STOP"
 bg = "8a0000"
+flash = true    # invert fg/bg every 500 ms for 3 s when cued
 
 [canned.cans_on]
 text = "PUT YOUR CANS ON"

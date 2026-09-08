@@ -49,6 +49,7 @@ placard_canned:
   show_stop:
     text: "SHOW STOP"
     bg: "8a0000"
+    flash: true
   cans_on:
     text: "PUT YOUR CANS ON"
     bg: "1f4e9e"
