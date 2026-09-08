@@ -1,0 +1,44 @@
+[package]
+name = "placard"
+version = "0.1.0"
+edition = "2024"
+description = "Single-purpose display appliance: solid background, centred text, controlled over OSC/TCP/HTTP"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
+clap = { version = "4.6.6", features = ["derive"] }
+gstreamer = "0.25.3"
+gstreamer-video = "0.25.3"
+rosc = "0.11.4"
+sd-notify = "0.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt", "net", "macros", "time"] }
+toml = "1.1.5"
+tracing = "0.1.44"
+tracing-journald = "0.3.2"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Recovery model (DESIGN.md §5): any thread panic must take the process down so
+# systemd restarts it. Unwinding would leave other threads running headless.
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[package.metadata.deb]
+maintainer = "Josh McMillan <josh@joshmcmillan.com>"
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, fonts-inter"
+section = "video"
+assets = [
+    ["target/release/placard", "usr/bin/", "755"],
+    ["packaging/config.toml.example", "etc/placard/config.toml", "644"],
+]
+conf-files = ["/etc/placard/config.toml"]
+systemd-units = { unit-name = "placard", unit-scripts = "packaging", enable = true }

@@ -1,0 +1,15 @@
+[Unit]
+Description=Placard display appliance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/placard --config /etc/placard/config.toml
+Restart=always
+RestartSec=1
+WatchdogSec=10
+Type=notify
+StateDirectory=placard
+
+[Install]
+WantedBy=multi-user.target
