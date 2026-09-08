@@ -54,10 +54,7 @@ impl Display {
 #[serde(deny_unknown_fields)]
 pub struct Net {
     pub osc_port: u16,
-    // Read by the TCP/HTTP listeners (M2); allow until they land.
-    #[allow(dead_code)]
     pub tcp_port: u16,
-    #[allow(dead_code)]
     pub http_port: u16,
 }
 

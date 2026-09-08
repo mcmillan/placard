@@ -70,7 +70,8 @@ fn main() -> anyhow::Result<()> {
     let (env_tx, env_rx) = mpsc::channel();
     let (spec_tx, spec_rx) = mpsc::channel();
 
-    let osc_addr = format!("0.0.0.0:{}", config.net.osc_port);
+    let config_net = config.net.clone();
+    let osc_addr = format!("0.0.0.0:{}", config_net.osc_port);
     let osc_socket =
         std::net::UdpSocket::bind(&osc_addr).with_context(|| format!("binding OSC {osc_addr}"))?;
     let osc_reply_socket = osc_socket.try_clone().context("cloning OSC socket")?;
@@ -90,6 +91,31 @@ fn main() -> anyhow::Result<()> {
         .name("osc".into())
         .spawn(move || net::osc::run(osc_socket, osc_tx))
         .context("spawning osc thread")?;
+
+    let tcp_addr = format!("0.0.0.0:{}", config_net.tcp_port);
+    let tcp_listener = std::net::TcpListener::bind(&tcp_addr)
+        .with_context(|| format!("binding TCP {tcp_addr}"))?;
+    let tcp_tx = env_tx.clone();
+    std::thread::Builder::new()
+        .name("tcp".into())
+        .spawn(move || net::tcp::run(tcp_listener, tcp_tx))
+        .context("spawning tcp thread")?;
+
+    let http_addr = format!("0.0.0.0:{}", config_net.http_port);
+    let http_listener = std::net::TcpListener::bind(&http_addr)
+        .with_context(|| format!("binding HTTP {http_addr}"))?;
+    let http_tx = env_tx.clone();
+    std::thread::Builder::new()
+        .name("http".into())
+        .spawn(move || {
+            if let Err(err) = net::http::run(http_listener, http_tx) {
+                // The HTTP listener dying silently would leave a half-alive
+                // appliance; die loudly and let systemd restart everything.
+                tracing::error!(%err, "http listener failed");
+                std::process::exit(1);
+            }
+        })
+        .context("spawning http thread")?;
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), ?sink, "placard up");
 

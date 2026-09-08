@@ -16,15 +16,14 @@ use crate::status::{self, StatusReport};
 
 /// Where the reply to a command goes. OSC acks are datagrams back to the
 /// sender; TCP/HTTP wait on a oneshot; parse errors never get this far.
-#[allow(dead_code)] // Oneshot/None constructed by the TCP/HTTP listeners (M2).
+/// (DESIGN.md §5 also sketches a `None` variant; every transport replies, so
+/// it had no constructor and is omitted.)
 pub enum ReplyTo {
     Osc(SocketAddr),
     Oneshot(mpsc::Sender<Result<Reply, CommandError>>),
-    None,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Status payload read by the TCP/HTTP listeners (M2).
 pub enum Reply {
     Ok,
     Status(StatusReport),
@@ -203,7 +202,6 @@ impl StateThread {
 
     fn send_reply(&self, reply: ReplyTo, result: Result<Reply, CommandError>) {
         match reply {
-            ReplyTo::None => {}
             ReplyTo::Oneshot(tx) => {
                 let _ = tx.send(result);
             }

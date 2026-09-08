@@ -53,16 +53,14 @@ pub enum CommandError {
     BadTimestamp(String),
     #[error("unknown canned id {0:?}")]
     UnknownCanned(String),
-    // Constructed by the TCP/HTTP listeners (M2); allow until they land.
-    #[allow(dead_code)]
     #[error("invalid JSON: {0}")]
     BadJson(String),
     #[error("status is not available over OSC")]
     StatusNotSupported,
+    #[error("shutting down")]
+    ShuttingDown,
 }
 
-// Called from the TCP/HTTP listeners (M2); allow until they land.
-#[allow(dead_code)]
 pub fn parse_json(line: &str) -> Result<Command, CommandError> {
     serde_json::from_str(line).map_err(|e| CommandError::BadJson(e.to_string()))
 }
