@@ -37,7 +37,7 @@ Non-goals (v1)
 | OS | Debian 13 (trixie). Kernel ≥ 6.12 is required: the N150 iGPU (PCI 8086:46D4) is not driven by Debian 12's 6.1 |
 | Display path | DRM/KMS directly via `kmssink`. No X, no Wayland |
 | Output mode | Pinned on the kernel cmdline, `video=HDMI-A-1:1920x1080@50D`. The rate comes from the inventory var `hdmi_rate` (default 50), which Ansible also writes into `config.toml` as `display.fps`. **The two must match**; a mismatch means dropped or duplicated frames |
-| Clock | `chrony`; system timezone stays UTC |
+| Clock | OS defaults (systemd-timesyncd, RTC coin cell). Placard neither manages nor monitors time |
 | Service user | root. `kmssink` wants DRM master, this is a single-purpose appliance, and a dedicated user + `video` group + udev rules buys nothing here. Do not add them |
 
 Rationale for these choices is in `docs/decisions.md`.
@@ -161,7 +161,7 @@ Colours are `rrggbb` strings on the wire. Canned messages are named `Scene`s in 
 | `countdown_to { target, label?, bg?, fg? }` | Countdown to ISO 8601 UTC instant |
 | `countdown_secs { secs, label?, bg?, fg? }` | Converted to an absolute target at receipt, then identical to above |
 | `clear` | Black background, empty text |
-| `status` | (HTTP/TCP only) returns current scene, uptime, clock sync state |
+| `status` | (HTTP/TCP only) returns current scene, uptime, build |
 | `history` | (HTTP/TCP only) last 200 inbound messages, incl. rejected, newest first; also rendered by the web page at `GET /` |
 
 Runtime errors — unknown canned id, malformed JSON, bad colour string, unparseable ISO 8601, wrong OSC arg types — are replied to on the originating transport, logged at `warn`, and otherwise ignored. The current scene is untouched. Nothing a client sends can terminate the process.
@@ -207,9 +207,8 @@ Examples:
              "content": { "kind": "countdown", "target": "2026-09-08T18:30:00Z", "label": "House opens in", "display": "-0:42" } },
   "canned_id": null,
   "uptime_secs": 8123,
-  "ntp_synced": true,
-  "clock_offset_ms": 3,
   "version": "0.3.1",
+  "build": "20260908053925",
   "last_command": { "at": "2026-09-08T18:29:10Z", "via": "osc", "from": "192.168.10.20:53101" }
 }
 ```
@@ -241,7 +240,7 @@ Every accepted OSC message is acknowledged with `/placard/ok` to the message's s
 | Kernel hang | `RuntimeWatchdogSec=30` in `/etc/systemd/system.conf` arms the iTCO hardware watchdog; a wedged kernel reboots the box |
 | Display unplugged / replugged | kmssink handles hotplug; the pinned mode means it comes back at 1080p |
 | Missing or corrupt `state.json` | Fails to parse → log, show `defaults.boot_scene`, carry on. Writes are tmpfile + `rename`, so this needs a filesystem-level corruption to happen |
-| Wrong clock | `/api/status` shows `ntp_synced: false`. Relative countdowns are unaffected |
+| Wrong clock | Absolute countdowns drift with the OS clock; relative countdowns are unaffected. Placard does not monitor sync |
 
 `placard.service`:
 
@@ -266,9 +265,11 @@ No `User=` line: the service runs as root (§3). Journald is capped (`SystemMaxU
 
 ## 8. Time
 
-Absolute countdowns and the on-screen wall clock both need a correct clock, and the wall clock additionally needs the right timezone (config, default `Europe/London`; the box's system TZ stays UTC). The venue provides both internet and a LAN NTP server; `chrony` uses the LAN server (from inventory) with `pool.ntp.org` as fallback, and the RTC coin cell covers the gap between power-on and first sync. The status endpoint exposes `ntp_synced` and `clock_offset_ms` so it's visible before the show, not during.
-
-Relative countdowns (`countdown_secs`) never depend on wall-clock correctness.
+Placard trusts the OS clock. Debian's stock time sync and the RTC coin cell
+are assumed sufficient; placard neither manages nor monitors
+synchronisation. Absolute countdowns (`countdown_to`) are only as right as
+the OS clock; relative countdowns (`countdown_secs`) never depend on it.
+The on-screen wall clock renders in the timezone from `[clock]` config.
 
 ## 9. Security
 
@@ -359,7 +360,7 @@ placard/
     inventory/hosts.yml
     group_vars/placard.yml
     site.yml
-    roles/base/      # kernel cmdline, chrony, watchdog, journald, sshd
+    roles/base/      # kernel cmdline, watchdog, journald, sshd
     roles/placard/   # apt deps, .deb install, config template, service
   tests/
     scenes/*.json      # snapshot fixtures
@@ -429,14 +430,14 @@ Local development is on macOS; see §14.
          hdmi_rate: 50
    ```
 4. `ansible-playbook -i inventory site.yml`. The playbook:
-   - installs base packages and chrony;
+   - installs base packages;
    - sets the kernel cmdline and runs `update-grub`;
    - masks `getty@tty1`, sets the systemd hardware watchdog, caps journald;
    - downloads the latest release `.deb` from GitHub (or the tag pinned by `placard_release`), verifies the checksum, installs it;
    - templates `config.toml` (canned messages come from `group_vars`);
    - enables and starts `placard.service`;
    - reboots if the cmdline changed.
-5. Verify: screen shows the `house_closed` canned scene (the boot default); `curl http://placard-01:8080/api/status` returns `ntp_synced: true`.
+5. Verify: screen shows the `house_closed` canned scene (the boot default); `curl http://placard-01:8080/api/status` answers with the installed build.
 6. Pull the power. Confirm it comes back to the same scene unattended. This step is not optional.
 7. `dd` the disk to a golden image and keep it with the spare.
 
@@ -476,13 +477,12 @@ Homebrew's `gstreamer` formula bundles base/good/bad/ugly, so `compositor`, `tex
 |---|---|---|---|
 | Video sink | `kmssink` | `autovideosink` → `glimagesink` window | `--sink kms|auto|png`. One factory function; nothing else in `render.rs` knows which |
 | Watchdog heartbeat | `sd_notify` via `NOTIFY_SOCKET` | no systemd | `sd-notify` crate is pure Rust and a no-op when the env var is absent; no `cfg` needed |
-| `ntp_synced` in status | `adjtimex`/`timedatectl` | not applicable | `cfg(target_os)`; macOS returns `"unknown"` |
 | State dir | `/var/lib/placard` via `StateDirectory` | `./state/` | `--state-dir` flag, default from `$STATE_DIRECTORY` |
 | Fonts | `fonts-inter` deb | `font-inter` cask | Same family name in config; Pango resolves it via fontconfig on both |
 | Font metrics | Debian freetype/fontconfig | Homebrew freetype/fontconfig | Close but not identical. Layout is eyeballed on the Mac and *asserted* only against Linux-rendered goldens (below) |
 | Mode/timing | pinned 1080p50 | window at 1080p, vsync'd to the Mac's display | Irrelevant to logic; render timing is verified on the box |
 
-Rule: no `cfg(target_os = "macos")` outside `status.rs` and the sink factory. If a third one appears, that's a design smell to fix rather than paper over.
+Rule: no `cfg(target_os)` outside the sink factory. If a second one appears, that's a design smell to fix rather than paper over.
 
 ### Inner loop
 

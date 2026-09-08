@@ -81,8 +81,6 @@ replies with the full status object:
                           "label": "House opens in", "display": "-0:42" } },
   "canned_id": null,
   "uptime_secs": 8123,
-  "ntp_synced": true,
-  "clock_offset_ms": 3,
   "version": "0.1.0",
   "build": "20260908053925",
   "last_command": { "at": "2026-09-08T18:29:10Z", "via": "osc", "from": "192.168.10.20:53101" }
@@ -92,10 +90,6 @@ replies with the full status object:
 - `content.kind` is `"text"` or `"countdown"`; `display` is the string
   currently on screen.
 - `canned_id` is set while the scene is an unmodified `canned` command.
-- `ntp_synced` is `true`/`false`, or `"unknown"` where it cannot be probed
-  (non-Linux dev machines).
-- `clock_offset_ms` is null when chrony is unavailable. Both NTP fields
-  are cached for up to 5 seconds.
 - `build` is the release tag this binary was built from (`"dev"` for local
   builds) — the way to confirm an upgrade actually landed.
 

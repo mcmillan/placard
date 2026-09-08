@@ -64,6 +64,6 @@ Companion to `DESIGN.md`. This file records *why*; `DESIGN.md` records *what*. N
 
 ## Development
 
-**Develop on macOS, verify on the box.** Homebrew's GStreamer bundle has every plugin used. The only platform seams are the sink factory and the `ntp_synced` probe. QLab being on the same Mac is the real advantage: the cue stack gets built against `localhost` before the hardware exists.
+**Develop on macOS, verify on the box.** Homebrew's GStreamer bundle has every plugin used. The only platform seam is the sink factory. (Revisited: the ntp probe was removed with the rest of time management — the OS clock is trusted.) QLab being on the same Mac is the real advantage: the cue stack gets built against `localhost` before the hardware exists.
 
 **Golden images are Linux-only.** Homebrew and Debian font stacks differ enough to fail pixel comparisons; the Mac is for eyeballing, the trixie container is for asserting.

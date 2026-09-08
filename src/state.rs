@@ -92,9 +92,6 @@ pub struct StateThread {
     /// When a flash began; transient by design — a restart mid-flash comes
     /// back with steady colours.
     flash_started: Option<Instant>,
-    /// Last NTP probe result and when it ran. Probing shells out, so it is
-    /// cached: a client polling status must not stall the ticker each poll.
-    ntp_cache: Option<(Instant, status::NtpProbe)>,
     spec_tx: mpsc::Sender<RenderSpec>,
     /// Cloned OSC socket, used only to send `/placard/ok` / `/placard/error`.
     osc_socket: Option<UdpSocket>,
@@ -129,7 +126,6 @@ impl StateThread {
             history_path,
             history_appends: 0,
             flash_started: None,
-            ntp_cache: None,
             spec_tx,
             osc_socket,
         };
@@ -344,21 +340,12 @@ impl StateThread {
                 return Ok(Reply::History(self.history.iter().rev().cloned().collect()));
             }
             Command::Status => {
-                let probe = match self.ntp_cache {
-                    Some((at, probe)) if at.elapsed() < Duration::from_secs(5) => probe,
-                    _ => {
-                        let probe = status::probe_ntp();
-                        self.ntp_cache = Some((Instant::now(), probe));
-                        probe
-                    }
-                };
                 return Ok(Reply::Status(status::report(
                     &self.scene,
                     self.canned_id.clone(),
                     self.started.elapsed().as_secs(),
                     self.last_command.clone(),
                     Utc::now(),
-                    probe,
                 )));
             }
         }

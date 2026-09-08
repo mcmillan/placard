@@ -2,7 +2,6 @@
 - name: Install base packages
   ansible.builtin.apt:
     name:
-      - chrony
       - ca-certificates
     state: present
     update_cache: true
@@ -51,15 +50,6 @@
     mode: "0644"
   notify: Restart journald
 
-- name: Point chrony at the venue NTP server with pool fallback
-  ansible.builtin.copy:
-    dest: /etc/chrony/sources.d/placard.sources
-    content: |
-      server {{ ntp_server }} iburst prefer
-      pool pool.ntp.org iburst
-    mode: "0644"
-  notify: Restart chrony
-
 - name: SSH is key-only
   ansible.builtin.copy:
     dest: /etc/ssh/sshd_config.d/10-placard.conf
@@ -68,10 +58,3 @@
       KbdInteractiveAuthentication no
     mode: "0644"
   notify: Restart sshd
-
-# Plain timedatectl rather than community.general.timezone so the playbook
-# has no collection dependencies.
-- name: System timezone stays UTC (on-screen clock timezone is app config)
-  ansible.builtin.command: timedatectl set-timezone Etc/UTC
-  when: ansible_date_time.tz != 'UTC'
-  changed_when: true

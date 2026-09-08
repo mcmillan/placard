@@ -11,7 +11,7 @@ A Rust binary that drives one 1080p display via GStreamer (`compositor` + `texto
 1. **No async runtime touches GStreamer.** The render thread runs a `glib::MainLoop` and nothing else. tokio, if used, stays on the HTTP thread. Threads talk over `std::sync::mpsc` only.
 2. **All text reaching `textoverlay` is escaped with `glib::markup_escape_text`.** It's Pango markup. `<` in a cue must render as `<`. The only unescaped markup is the `<span size="60%">` wrapper the code itself adds around countdown labels.
 3. **Nothing a client sends can terminate the process.** Bad input → error reply, `warn` log, scene unchanged. No `unwrap`/`expect` on anything derived from the network, config, or `state.json`.
-4. **`cfg(target_os)` appears in exactly two places:** the sink factory in `render.rs` and the `ntp_synced` probe in `status.rs`. If you think you need a third, stop and say so.
+4. **`cfg(target_os)` appears in exactly one place:** the sink factory in `render.rs`. If you think you need another, stop and say so.
 5. **No new crates** beyond the list in `DESIGN.md` §11 without stating why in the PR description. No `image`, no config-reload crates, no glib↔async bridges.
 6. **Colours:** `videotestsrc.foreground-color` and `textoverlay.color` are `0xAARRGGBB`. Background alpha `0xFF`; canvas layers exactly `0x00000000`. `compositor background=black`.
 7. **`display.fps` in config must equal the kernel `video=` rate.** Don't derive one from the other in code; both come from Ansible.

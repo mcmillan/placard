@@ -28,14 +28,13 @@ wrong (§12 of `DESIGN.md`).
    cd ansible
    ansible-playbook -i inventory/hosts.yml site.yml
    ```
-   It installs base packages and chrony, pins the kernel cmdline (1080p mode,
-   quiet console), masks `getty@tty1`, arms the hardware watchdog, caps
-   journald, downloads and installs the latest release .deb (checksum-verified),
+   It installs base packages, pins the kernel cmdline (1080p mode, quiet
+   console), masks `getty@tty1`, arms the hardware watchdog, caps journald, downloads and installs the latest release .deb (checksum-verified),
    templates `/etc/placard/config.toml`, enables the service, and reboots if
    the cmdline changed.
 5. **Verify**: the screen shows HOUSE CLOSED (the boot scene);
-   `curl http://placard-01:8080/api/status` returns `"ntp_synced": true` and
-   a `"build"` matching the installed release tag.
+   `curl http://placard-01:8080/api/status` returns a `"build"` matching the
+   installed release tag.
 6. **Pull the power.** Confirm the box comes back to the same scene with no
    operator action. This step is not optional.
 7. `dd` the disk to a golden image; keep it with the spare box.

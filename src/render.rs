@@ -35,9 +35,8 @@ pub enum SinkKind {
 
 /// Platform default when `--sink` is not given: the appliance's unit file
 /// passes only `--config`, so Linux must default to kms; a dev machine gets
-/// a window. This sink factory and the ntp probe in status.rs are
-/// deliberately the only two `cfg(target_os)` sites — platform differences
-/// stay contained here.
+/// a window. This sink factory is deliberately the only `cfg(target_os)`
+/// site — platform differences stay contained here.
 pub fn default_sink() -> SinkKind {
     #[cfg(target_os = "linux")]
     {

@@ -6,9 +6,6 @@ placard_repo: mcmillan/placard
 # specific timestamp tag (e.g. "20260908053513") to roll back or hold a box.
 placard_release: latest
 
-# LAN NTP server; pool.ntp.org remains as fallback. Override per venue.
-ntp_server: 192.168.10.1
-
 # Wall-clock timezone shown on screen. The system timezone stays UTC.
 placard_timezone: Europe/London
 
