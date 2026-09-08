@@ -11,10 +11,15 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The repo default keeps workflow tokens read-only; creating the release
-# (and its tag) needs contents write, granted explicitly here.
+# The repo default keeps workflow tokens read-only; grants here are exactly
+# what the steps use. contents:write covers checkout plus creating the
+# release, its tag and its assets; pull-requests:read is for
+# `gh release create --generate-notes`, which summarises the pull requests
+# behind each commit and 403s the whole create call without it. The cache
+# step uses the runner's cache service, not this token.
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   build:
