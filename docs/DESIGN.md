@@ -149,7 +149,7 @@ enum Content {
 }
 ```
 
-Colours are `#rrggbb` strings on the wire. Canned messages are named `Scene`s in config; a canned command may override `bg`/`fg`.
+Colours are `rrggbb` strings on the wire. Canned messages are named `Scene`s in config; a canned command may override `bg`/`fg`.
 
 ### Commands
 
@@ -187,12 +187,12 @@ enum Command {
 }
 ```
 
-`Rgb` deserialises from `#rrggbb` only (case-insensitive, no short form, no alpha). Unknown fields are an error, not ignored.
+`Rgb` deserialises from `rrggbb` (case-insensitive, no short form, no alpha; a leading `#` is tolerated on input but never emitted — bare hex avoids shell quoting and QLab cue escaping). Unknown fields are an error, not ignored.
 
 Examples:
 
 ```json
-{ "cmd": "show", "text": "STAND BY", "bg": "#000000", "fg": "#ffffff" }
+{ "cmd": "show", "text": "STAND BY", "bg": "000000", "fg": "ffffff" }
 { "cmd": "countdown_secs", "secs": 300, "label": "House opens in" }
 { "cmd": "canned", "id": "go" }
 ```
@@ -202,7 +202,7 @@ Examples:
 ```json
 {
   "ok": true,
-  "scene": { "bg": "#8a0000", "fg": "#ffffff",
+  "scene": { "bg": "8a0000", "fg": "ffffff",
              "content": { "kind": "countdown", "target": "2026-09-08T18:30:00Z", "label": "House opens in", "display": "-0:42" } },
   "canned_id": null,
   "uptime_secs": 8123,
@@ -217,7 +217,7 @@ Examples:
 
 **TCP** — port 9001, one JSON object per line, one JSON reply line per command, same bodies as HTTP. Connections may stay open and send many commands. A line over 64 KiB or invalid UTF-8 gets an error reply and the connection is closed.
 
-**OSC** — UDP 9000. Colours as `#rrggbb` strings so QLab cues stay readable.
+**OSC** — UDP 9000. Colours as `rrggbb` strings so QLab cues stay readable.
 
 | Address | Args |
 |---|---|
@@ -301,37 +301,37 @@ font = "Inter Semibold 40"
 position = "bottom-right"   # top-left | top-right | bottom-left | bottom-right
 
 [defaults]
-bg = "#000000"
-fg = "#ffffff"
+bg = "000000"
+fg = "ffffff"
 boot_scene = "house_closed"   # shown when there is no saved state
 
 [canned.house_closed]
 text = "HOUSE CLOSED"
-bg = "#8a0000"
+bg = "8a0000"
 
 [canned.house_open]
 text = "HOUSE OPEN"
-bg = "#0b6e2e"
+bg = "0b6e2e"
 
 [canned.five_minute]
 text = "5 MINUTE WARNING"
-bg = "#b36b00"
+bg = "b36b00"
 
 [canned.awaiting_clearance]
 text = "AWAITING CLEARANCE"
-bg = "#b36b00"
+bg = "b36b00"
 
 [canned.go]
 text = "GO"
-bg = "#0b6e2e"
+bg = "0b6e2e"
 
 [canned.show_stop]
 text = "SHOW STOP"
-bg = "#8a0000"
+bg = "8a0000"
 
 [canned.cans_on]
 text = "PUT YOUR CANS ON"
-bg = "#1f4e9e"
+bg = "1f4e9e"
 ```
 
 Colours above are placeholders; the ids are the contract, since they're what QLab cues reference.
@@ -530,7 +530,7 @@ Each milestone is done when every line in its "done when" list is true. `make te
 
 **M1 — Pipeline and OSC**
 - `make run` opens a 1920×1080 window showing `defaults.boot_scene` with the clock bottom-right (no saved state on first run).
-- `oscsend localhost 9000 /placard/show s HELLO` changes the text within one frame; `/placard/colour s "#ff0000"` changes the background; `/placard/clear` blacks it. Sender receives `/placard/ok`.
+- `oscsend localhost 9000 /placard/show s HELLO` changes the text within one frame; `/placard/colour s "ff0000"` changes the background; `/placard/clear` blacks it. Sender receives `/placard/ok`.
 - A 400-character string wraps and shrinks to fit inside the padding; `<b>` in a string renders literally.
 - `placard --snapshot tests/scenes/text_short.json /tmp/a.png` writes a 1920×1080 PNG.
 - On the real box: the same binary under `--sink kms` shows the same picture; text edges have no visible fringing.

@@ -2,7 +2,7 @@
 width = 1920
 height = 1080
 fps = 50                     # must equal the kernel video= rate; Ansible sets both from hdmi_rate
-font = "Inter Bold"
+font = "Inter Bold 120"
 padding_x = 96
 padding_y = 64
 
@@ -17,34 +17,34 @@ font = "Inter Semibold 40"
 position = "bottom-right"   # top-left | top-right | bottom-left | bottom-right
 
 [defaults]
-bg = "#000000"
-fg = "#ffffff"
+bg = "000000"
+fg = "ffffff"
 boot_scene = "house_closed"   # shown when there is no saved state
 
 [canned.house_closed]
 text = "HOUSE CLOSED"
-bg = "#8a0000"
+bg = "8a0000"
 
 [canned.house_open]
 text = "HOUSE OPEN"
-bg = "#0b6e2e"
+bg = "0b6e2e"
 
 [canned.five_minute]
 text = "5 MINUTE WARNING"
-bg = "#b36b00"
+bg = "b36b00"
 
 [canned.awaiting_clearance]
 text = "AWAITING CLEARANCE"
-bg = "#b36b00"
+bg = "b36b00"
 
 [canned.go]
 text = "GO"
-bg = "#0b6e2e"
+bg = "0b6e2e"
 
 [canned.show_stop]
 text = "SHOW STOP"
-bg = "#8a0000"
+bg = "8a0000"
 
 [canned.cans_on]
 text = "PUT YOUR CANS ON"
-bg = "#1f4e9e"
+bg = "1f4e9e"
