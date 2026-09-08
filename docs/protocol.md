@@ -8,7 +8,7 @@ transport and the current scene is untouched.
 |---|---|---|
 | OSC | 9000/udp | messages per the address table below |
 | TCP | 9001 | newline-delimited JSON, one reply line per command |
-| HTTP | 8080 | `POST /api/command` (JSON body), `GET /api/status` |
+| HTTP | 8080 | `POST /api/command` (JSON body), `GET /api/status`, `GET /api/history`, history page at `/` |
 
 Ports come from `/etc/placard/config.toml` `[net]`; the values above are the
 defaults.
@@ -34,6 +34,7 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
 { "cmd": "countdown_secs", "secs": 300, "label": "House opens in" }
 { "cmd": "clear" }
 { "cmd": "status" }
+{ "cmd": "history" }
 ```
 
 - `bg`/`fg` are optional everywhere; omitted means "keep the current colour"
@@ -50,7 +51,12 @@ Identical bodies over TCP (one object per line) and HTTP (`POST
   hour, `H:MM:SS` from one hour.
 - `clear` is black background, no text (not "back to the boot scene"). The
   wall clock stays on screen across every command, including `clear`.
-- `status` is TCP/HTTP only.
+- `status` and `history` are TCP/HTTP only. `history` returns
+  `{"ok":true,"history":[…]}` — the last 200 inbound messages, newest first,
+  each with `at`, `via`, `from`, the `raw` wire text (truncated at 512
+  chars) and `ok`/`error`. Rejected messages are included; `status` and
+  `history` queries themselves are not. The history is in-memory only and
+  clears on restart.
 
 ### Replies
 
@@ -118,11 +124,19 @@ Command-line examples (`oscsend` from liblo):
 
 ```
 oscsend localhost 9000 /placard/canned s house_open
-oscsend localhost 9000 /placard/show s "STAND BY" s 000000 s ffffff
-oscsend localhost 9000 /placard/countdown/secs i 300 s "House opens in"
-oscsend localhost 9000 /placard/show s "SHOW STOP" i 1
+oscsend localhost 9000 /placard/show sss "STAND BY" 000000 ffffff
+oscsend localhost 9000 /placard/countdown/secs is 300 "House opens in"
+oscsend localhost 9000 /placard/show si "SHOW STOP" 1
 oscsend localhost 9000 /placard/clear
 ```
+
+## Web UI
+
+`GET /` serves a read-only, self-contained history page: every inbound
+message with its timestamp, transport, source address, raw wire text and
+outcome, refreshing every 2 s. It is diagnostics, not operator tooling — it
+sends no commands. OSC messages are shown in a rendered one-line form
+(`/placard/show s:"GO" i:1`) since the raw datagram is binary.
 
 ## Text rendering
 

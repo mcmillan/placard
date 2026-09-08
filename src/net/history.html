@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>placard — message history</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 1.5rem;
+    background: #111; color: #ddd;
+    font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 1rem; font-weight: 600; margin: 0 0 .25rem; color: #fff; }
+  #meta { color: #888; margin-bottom: 1rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    text-align: left; padding: .35rem .75rem .35rem 0;
+    border-bottom: 1px solid #2a2a2a; vertical-align: top;
+    white-space: nowrap;
+  }
+  th { color: #888; font-weight: 600; position: sticky; top: 0; background: #111; }
+  td.raw { white-space: pre-wrap; word-break: break-all; color: #fff; }
+  td.err { color: #ff6b6b; white-space: normal; }
+  tr.rejected td { opacity: .85; }
+  tr.rejected td.time { border-left: 3px solid #ff6b6b; padding-left: .5rem; }
+  .via { display: inline-block; min-width: 3.5em; color: #7ab7ff; }
+  #empty { color: #666; padding: 2rem 0; }
+</style>
+</head>
+<body>
+<h1>placard — inbound message history</h1>
+<div id="meta">loading…</div>
+<table id="table" hidden>
+  <thead>
+    <tr><th>time (UTC)</th><th>via</th><th>from</th><th>raw message</th><th>result</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="empty" hidden>No messages yet. Send a cue and it will appear here.</div>
+<script>
+  const fmt = (iso) => iso.replace("T", " ").replace(/\.\d+Z$/, "");
+  async function refresh() {
+    try {
+      const res = await fetch("/api/history");
+      const data = await res.json();
+      const rows = document.getElementById("rows");
+      rows.replaceChildren();
+      for (const e of data.history) {
+        const tr = document.createElement("tr");
+        if (!e.ok) tr.className = "rejected";
+        const cells = [
+          ["time", fmt(e.at)],
+          ["", e.via],
+          ["", e.from || "—"],
+          ["raw", e.raw],
+          [e.ok ? "" : "err", e.ok ? "ok" : e.error],
+        ];
+        for (const [cls, text] of cells) {
+          const td = document.createElement("td");
+          if (cls) td.className = cls;
+          if (cls === "") td.innerHTML = "";
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        tr.children[1].innerHTML = `<span class="via">${e.via}</span>`;
+        rows.appendChild(tr);
+      }
+      document.getElementById("table").hidden = data.history.length === 0;
+      document.getElementById("empty").hidden = data.history.length !== 0;
+      document.getElementById("meta").textContent =
+        `${data.history.length} message${data.history.length === 1 ? "" : "s"} · ` +
+        `newest first · refreshes every 2 s · history is in-memory and clears on restart`;
+    } catch (err) {
+      document.getElementById("meta").textContent = `unreachable: ${err}`;
+    }
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>

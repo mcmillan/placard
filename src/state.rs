@@ -15,8 +15,7 @@ use crate::scene::{Content, Scene, format_clock};
 use crate::status::{self, StatusReport};
 
 /// Where the reply to a command goes. OSC acks are datagrams back to the
-/// sender; TCP/HTTP wait on a oneshot. Parse errors never get this far —
-/// listeners reply to those themselves.
+/// sender; TCP/HTTP wait on a oneshot.
 pub enum ReplyTo {
     Osc(SocketAddr),
     Oneshot(mpsc::Sender<Result<Reply, CommandError>>),
@@ -26,15 +25,39 @@ pub enum ReplyTo {
 pub enum Reply {
     Ok,
     Status(StatusReport),
+    History(Vec<HistoryEntry>),
 }
 
-/// A parsed command plus enough provenance to ack it and record it.
+/// An inbound message plus enough provenance to ack and record it. Parse
+/// failures travel here too (as `Err`) so they appear in the history and
+/// their replies route like everyone else's.
 pub struct Envelope {
-    pub command: Command,
+    pub command: Result<Command, CommandError>,
+    /// The wire text as received (OSC rendered readably), for the history.
+    pub raw: String,
     pub via: &'static str,
     pub from: Option<SocketAddr>,
     pub reply: ReplyTo,
 }
+
+/// One inbound message as shown by `/api/history` and the web UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryEntry {
+    pub at: DateTime<Utc>,
+    pub via: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<SocketAddr>,
+    pub raw: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Ring size for the in-memory history. Diagnostics, not a log: it is not
+/// persisted and restarts clear it.
+const HISTORY_CAP: usize = 200;
+/// Raw text is truncated for storage so a 64 KiB TCP line can't bloat the UI.
+const HISTORY_RAW_CAP: usize = 512;
 
 /// What survives a power cycle: the scene and where it came from.
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,6 +82,7 @@ pub struct StateThread {
     last_command: Option<LastCommand>,
     started: Instant,
     last_pushed: Option<RenderSpec>,
+    history: std::collections::VecDeque<HistoryEntry>,
     /// When a flash began; transient by design — a restart mid-flash comes
     /// back with steady colours.
     flash_started: Option<Instant>,
@@ -90,6 +114,7 @@ impl StateThread {
             last_command: None,
             started: Instant::now(),
             last_pushed: None,
+            history: std::collections::VecDeque::with_capacity(HISTORY_CAP),
             flash_started: None,
             spec_tx,
             osc_socket,
@@ -118,10 +143,19 @@ impl StateThread {
     }
 
     fn handle(&mut self, envelope: Envelope) {
-        let result = self.apply(&envelope.command);
+        let result = match &envelope.command {
+            Ok(command) => self.apply(command),
+            Err(err) => Err(err.clone()),
+        };
+        // Queries stay out of the history or the UI's own polling would
+        // flood it.
+        let query = matches!(envelope.command, Ok(Command::Status | Command::History));
+        if !query {
+            self.record(&envelope, result.as_ref().err());
+        }
         if let Err(err) = &result {
             tracing::warn!(via = envelope.via, from = ?envelope.from, %err, "command rejected");
-        } else if !matches!(envelope.command, Command::Status) {
+        } else if !query {
             self.last_command = Some(LastCommand {
                 at: Utc::now(),
                 via: envelope.via,
@@ -132,12 +166,35 @@ impl StateThread {
         self.send_reply(envelope.reply, result);
     }
 
+    fn record(&mut self, envelope: &Envelope, error: Option<&CommandError>) {
+        if self.history.len() >= HISTORY_CAP {
+            self.history.pop_front();
+        }
+        let mut raw = envelope.raw.clone();
+        if raw.len() > HISTORY_RAW_CAP {
+            let mut end = HISTORY_RAW_CAP;
+            while !raw.is_char_boundary(end) {
+                end -= 1;
+            }
+            raw.truncate(end);
+            raw.push('…');
+        }
+        self.history.push_back(HistoryEntry {
+            at: Utc::now(),
+            via: envelope.via,
+            from: envelope.from,
+            raw,
+            ok: error.is_none(),
+            error: error.map(|e| e.to_string()),
+        });
+    }
+
     /// Apply a command to the scene. Errors leave the scene untouched. Any
     /// scene-changing command ends a running flash; show/canned may start a
     /// new one.
     fn apply(&mut self, command: &Command) -> Result<Reply, CommandError> {
         let defaults = &self.config.defaults;
-        if !matches!(command, Command::Status) {
+        if !matches!(command, Command::Status | Command::History) {
             self.flash_started = None;
         }
         match command {
@@ -212,6 +269,10 @@ impl StateThread {
             Command::Clear => {
                 self.scene = Scene::cleared(defaults.fg);
                 self.canned_id = None;
+            }
+            Command::History => {
+                // Newest first, the order a human scans it in.
+                return Ok(Reply::History(self.history.iter().rev().cloned().collect()));
             }
             Command::Status => {
                 return Ok(Reply::Status(status::report(
@@ -579,6 +640,93 @@ mod tests {
         assert!(f64::from(spec.text_px) * AVG_CHAR_W * 60.0 <= 1728.0);
     }
 
+    fn test_state(name: &str) -> (StateThread, mpsc::Receiver<RenderSpec>) {
+        let dir = std::env::temp_dir().join(format!("placard-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (spec_tx, spec_rx) = mpsc::channel();
+        (
+            StateThread::new(test_config(), &dir, spec_tx, None),
+            spec_rx,
+        )
+    }
+
+    fn envelope(
+        command: Result<Command, CommandError>,
+        raw: &str,
+    ) -> (Envelope, mpsc::Receiver<Result<Reply, CommandError>>) {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        (
+            Envelope {
+                command,
+                raw: raw.into(),
+                via: "tcp",
+                from: None,
+                reply: ReplyTo::Oneshot(reply_tx),
+            },
+            reply_rx,
+        )
+    }
+
+    fn history_of(state: &mut StateThread) -> Vec<HistoryEntry> {
+        let (env, rx) = envelope(Ok(Command::History), "");
+        state.handle(env);
+        match rx.recv().unwrap() {
+            Ok(Reply::History(entries)) => entries,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_records_accepted_and_rejected_but_not_queries() {
+        let (mut state, _spec_rx) = test_state("history");
+        let (env, _rx) = envelope(
+            Ok(Command::Show {
+                text: "GO".into(),
+                bg: None,
+                fg: None,
+                flash: false,
+            }),
+            r#"{"cmd":"show","text":"GO"}"#,
+        );
+        state.handle(env);
+        let (env, _rx) = envelope(Err(CommandError::BadJson("nope".into())), "not json");
+        state.handle(env);
+        let (env, _rx) = envelope(Ok(Command::Status), "");
+        state.handle(env);
+
+        let entries = history_of(&mut state);
+        // Newest first; the status query and the history query are absent.
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].raw, "not json");
+        assert!(!entries[0].ok);
+        assert_eq!(entries[0].error.as_deref(), Some("invalid JSON: nope"));
+        assert_eq!(entries[1].raw, r#"{"cmd":"show","text":"GO"}"#);
+        assert!(entries[1].ok);
+        assert_eq!(entries[1].via, "tcp");
+    }
+
+    #[test]
+    fn history_is_a_ring_and_truncates_long_raw() {
+        let (mut state, _spec_rx) = test_state("history-ring");
+        for i in 0..(HISTORY_CAP + 5) {
+            let (env, _rx) = envelope(
+                Err(CommandError::BadJson(format!("e{i}"))),
+                &format!("line {i} {}", "x".repeat(2000)),
+            );
+            state.handle(env);
+        }
+        let entries = history_of(&mut state);
+        assert_eq!(entries.len(), HISTORY_CAP);
+        // Oldest five fell off the front; newest is the last sent.
+        assert!(
+            entries[0]
+                .raw
+                .starts_with(&format!("line {}", HISTORY_CAP + 4))
+        );
+        assert!(entries[0].raw.ends_with('…'));
+        assert!(entries[0].raw.len() < 600);
+    }
+
     #[test]
     fn flash_show_toggles_specs_through_the_state_thread() {
         let dir = std::env::temp_dir().join(format!("placard-flash-{}", std::process::id()));
@@ -591,12 +739,13 @@ mod tests {
         let (reply_tx, reply_rx) = mpsc::channel();
         env_tx
             .send(Envelope {
-                command: Command::Show {
+                command: Ok(Command::Show {
                     text: "SHOW STOP".into(),
                     bg: Some("8a0000".parse().unwrap()),
                     fg: Some("ffffff".parse().unwrap()),
                     flash: true,
-                },
+                }),
+                raw: r#"{"cmd":"show","text":"SHOW STOP","flash":true}"#.into(),
                 via: "tcp",
                 from: None,
                 reply: ReplyTo::Oneshot(reply_tx),

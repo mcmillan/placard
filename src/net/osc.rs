@@ -1,15 +1,16 @@
+use std::fmt::Write as _;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc;
 
-use rosc::OscPacket;
+use rosc::{OscMessage, OscPacket, OscType};
 
 use crate::command::parse_osc;
 use crate::state::{Envelope, ReplyTo};
 
-/// OSC listener: UDP datagrams → `Command`s on the state channel. Accepted
-/// messages are acked by the state thread (`/placard/ok`); messages that fail
-/// to parse are rejected here with `/placard/error`. Runs until the process
-/// dies; nothing a client sends can make it return.
+/// OSC listener: UDP datagrams → inbound messages on the state channel,
+/// parse failures included — the state thread records them in the history
+/// and sends the `/placard/ok` / `/placard/error` ack either way. Runs until
+/// the process dies; nothing a client sends can make it return.
 pub fn run(socket: UdpSocket, tx: mpsc::Sender<Envelope>) {
     let mut buf = [0u8; 65_536];
     loop {
@@ -21,8 +22,9 @@ pub fn run(socket: UdpSocket, tx: mpsc::Sender<Envelope>) {
             }
         };
         match rosc::decoder::decode_udp(&buf[..len]) {
-            Ok((_, packet)) => handle_packet(&socket, &tx, packet, from),
+            Ok((_, packet)) => handle_packet(&tx, packet, from),
             Err(err) => {
+                // Not OSC at all: nothing to attribute or reply to.
                 tracing::warn!(%from, %err, "dropping undecodable OSC datagram");
             }
         }
@@ -31,49 +33,40 @@ pub fn run(socket: UdpSocket, tx: mpsc::Sender<Envelope>) {
 
 /// Bundles are unpacked and each message handled independently; bundle
 /// timestamps are ignored.
-fn handle_packet(
-    socket: &UdpSocket,
-    tx: &mpsc::Sender<Envelope>,
-    packet: OscPacket,
-    from: SocketAddr,
-) {
+fn handle_packet(tx: &mpsc::Sender<Envelope>, packet: OscPacket, from: SocketAddr) {
     match packet {
         OscPacket::Bundle(bundle) => {
             for inner in bundle.content {
-                handle_packet(socket, tx, inner, from);
+                handle_packet(tx, inner, from);
             }
         }
-        OscPacket::Message(msg) => match parse_osc(&msg) {
-            Ok(command) => {
-                let envelope = Envelope {
-                    command,
-                    via: "osc",
-                    from: Some(from),
-                    reply: ReplyTo::Osc(from),
-                };
-                if tx.send(envelope).is_err() {
-                    tracing::error!("state thread gone, dropping OSC command");
-                }
+        OscPacket::Message(msg) => {
+            let envelope = Envelope {
+                command: parse_osc(&msg),
+                raw: render(&msg),
+                via: "osc",
+                from: Some(from),
+                reply: ReplyTo::Osc(from),
+            };
+            if tx.send(envelope).is_err() {
+                tracing::error!("state thread gone, dropping OSC message");
             }
-            Err(err) => {
-                tracing::warn!(%from, addr = %msg.addr, %err, "rejecting OSC message");
-                reply_error(socket, from, &err.to_string());
-            }
-        },
+        }
     }
 }
 
-fn reply_error(socket: &UdpSocket, to: SocketAddr, reason: &str) {
-    let msg = rosc::OscMessage {
-        addr: "/placard/error".into(),
-        args: vec![rosc::OscType::String(reason.into())],
-    };
-    match rosc::encoder::encode(&rosc::OscPacket::Message(msg)) {
-        Ok(bytes) => {
-            if let Err(err) = socket.send_to(&bytes, to) {
-                tracing::warn!(%to, %err, "failed to send OSC error reply");
-            }
-        }
-        Err(err) => tracing::warn!(%err, "failed to encode OSC error reply"),
+/// A readable one-line form of an OSC message for the history — the raw
+/// datagram is binary and useless to a human.
+fn render(msg: &OscMessage) -> String {
+    let mut out = msg.addr.clone();
+    for arg in &msg.args {
+        let _ = match arg {
+            OscType::String(s) => write!(out, " s:{s:?}"),
+            OscType::Int(n) => write!(out, " i:{n}"),
+            OscType::Float(f) => write!(out, " f:{f}"),
+            OscType::Bool(b) => write!(out, " {b}"),
+            other => write!(out, " {other:?}"),
+        };
     }
+    out
 }

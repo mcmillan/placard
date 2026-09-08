@@ -162,6 +162,7 @@ Colours are `rrggbb` strings on the wire. Canned messages are named `Scene`s in 
 | `countdown_secs { secs, label?, bg?, fg? }` | Converted to an absolute target at receipt, then identical to above |
 | `clear` | Black background, empty text |
 | `status` | (HTTP/TCP only) returns current scene, uptime, clock sync state |
+| `history` | (HTTP/TCP only) last 200 inbound messages, incl. rejected, newest first; also rendered by the web page at `GET /` |
 
 Runtime errors — unknown canned id, malformed JSON, bad colour string, unparseable ISO 8601, wrong OSC arg types — are replied to on the originating transport, logged at `warn`, and otherwise ignored. The current scene is untouched. Nothing a client sends can terminate the process.
 
@@ -213,7 +214,7 @@ Examples:
 }
 ```
 
-`content.kind` is `"text"` or `"countdown"`; `canned_id` is set when the current scene came from a `canned` command unmodified. No other HTTP routes exist.
+`content.kind` is `"text"` or `"countdown"`; `canned_id` is set when the current scene came from a `canned` command unmodified. The only other HTTP routes are `GET /api/history` and the read-only history page at `GET /`.
 
 **TCP** — port 9001, one JSON object per line, one JSON reply line per command, same bodies as HTTP. Connections may stay open and send many commands. A line over 64 KiB or invalid UTF-8 gets an error reply and the connection is closed.
 
@@ -489,7 +490,7 @@ Rule: no `cfg(target_os = "macos")` outside `status.rs` and the sink factory. If
 ```
 cargo run -- --config packaging/config.toml.example --sink auto --state-dir ./state
 oscsend localhost 9000 /placard/canned s house_open
-oscsend localhost 9000 /placard/countdown/secs i 90 s "House opens in"
+oscsend localhost 9000 /placard/countdown/secs is 90 "House opens in"
 curl -d '{"cmd":"show","text":"A rather longer line to check wrapping behaves"}' localhost:8080/api/command
 printf '{"cmd":"clear"}\n' | nc localhost 9001
 ```

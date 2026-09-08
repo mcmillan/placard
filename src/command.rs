@@ -40,9 +40,10 @@ pub enum Command {
     },
     Clear,
     Status,
+    History,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum CommandError {
     #[error("unknown address {0}")]
     UnknownAddress(String),
@@ -59,8 +60,8 @@ pub enum CommandError {
     UnknownCanned(String),
     #[error("invalid JSON: {0}")]
     BadJson(String),
-    #[error("status is not available over OSC")]
-    StatusNotSupported,
+    #[error("{0} is not available over OSC")]
+    QueryNotSupported(&'static str),
     #[error("shutting down")]
     ShuttingDown,
 }
@@ -134,7 +135,8 @@ pub fn parse_osc(msg: &OscMessage) -> Result<Command, CommandError> {
             args.no_more(0, "no args")?;
             Ok(Command::Clear)
         }
-        "/placard/status" => Err(CommandError::StatusNotSupported),
+        "/placard/status" => Err(CommandError::QueryNotSupported("status")),
+        "/placard/history" => Err(CommandError::QueryNotSupported("history")),
         other => Err(CommandError::UnknownAddress(other.to_string())),
     }
 }

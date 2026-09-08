@@ -69,15 +69,9 @@ fn serve(stream: TcpStream, tx: mpsc::Sender<Envelope>) {
         if text.is_empty() {
             continue;
         }
-        // The state thread logs rejected commands; only parse failures are
-        // logged here, or they'd never be logged at all.
-        let result = match parse_json(text) {
-            Ok(command) => dispatch(&tx, command, "tcp", peer),
-            Err(err) => {
-                tracing::warn!(?peer, %err, "tcp line rejected");
-                Err(err)
-            }
-        };
+        // Parse failures dispatch too: the state thread records every
+        // inbound line in the history and logs the rejection.
+        let result = dispatch(&tx, parse_json(text), text.to_string(), "tcp", peer);
         if writeln!(writer, "{}", reply_json(&result)).is_err() {
             return;
         }
