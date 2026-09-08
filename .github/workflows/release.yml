@@ -16,7 +16,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential curl ca-certificates pkg-config git \
+            build-essential curl ca-certificates pkg-config git gh \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-x \
@@ -52,9 +52,12 @@ jobs:
           sha256sum "$DEB" > "$DEB.sha256"
           echo "DEB=$DEB" >> "$GITHUB_ENV"
 
+      # No third-party actions: release via the GitHub CLI (Debian's gh
+      # package) with the workflow's own token.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ env.DEB }}
-            ${{ env.DEB }}.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          gh release create "$GITHUB_REF_NAME" "$DEB" "$DEB.sha256" \
+            --title "$GITHUB_REF_NAME" --generate-notes
